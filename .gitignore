@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Generated outputs
+output*.jpg
+result_*.jpg
+*.csv
+*.xlsx
+*.xlsx~
+

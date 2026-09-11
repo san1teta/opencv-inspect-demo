@@ -1,12 +1,26 @@
 import cv2
+color_map = {
+    '合格': (0, 255, 0),
+    '轻度': (0, 255, 255),
+    '中度': (0, 165, 255),
+    '重度': (0, 0, 255)
+}
 
-def draw_result(img, all_features):
+def draw_result(img, all_features):# all_features：'contour': cnt,'diameter_mm': diameter_mm,'result': result
     output = img.copy()
     for i in all_features:
         cnt = i['contour']
         x, y, w, h = cv2.boundingRect(cnt)
-        color = (0, 0,255) if i['defects'] else (0, 255, 0)
-        label = i['coin_type']
+        if i['result']['circularity'] == '不合格':
+            color = (0, 0, 255)
+            label = '圆度不合格'
+        else:
+            color = color_map[i['result']['severity']]
+            if i['result']['severity'] == '合格':
+                label = '合格'
+            else:
+                label = f"{i['result']['direction']}-{i['result']['severity']}"
+
         cv2.rectangle(output, (x, y), (x+w, y+h), color, 2)
         cv2.putText(output, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     return output

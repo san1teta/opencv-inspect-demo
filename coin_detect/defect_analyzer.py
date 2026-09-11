@@ -1,25 +1,33 @@
-def judge_quality(features, min_circularity, min_diameter):
-    defects = []
-    if features['circularity'] < min_circularity:
-        defects.append("变形")
-    if features['diameter_pixels'] < min_diameter:
-        defects.append("磨损")
-        
-    return defects if defects else None
+import config_setting
 
-def analyze_defects(features):
-    if features['diameter_pixels'] > 20:
-        min_diameter = 10
-        min_circularity = 0.5
-        coin_type = "1元"
-    elif features['diameter_pixels'] > 10:
-        min_diameter = 5
-        min_circularity = 0.3
-        coin_type = "5角"
-    else:
-        min_diameter = 2
-        min_circularity = 0.1
-        coin_type = "1角"
-    
-    defects = judge_quality(features, min_circularity, min_diameter)
-    return defects, coin_type
+def judge_quality(diameter_mm, circularity, coin_name):
+    result = {
+        'circularity': '合格',
+        'direction':'未检测',
+        'severity':'未检测',
+        'deviation':None
+    }
+
+    if circularity < config_setting.min_circularity:
+        result['circularity'] = '不合格'
+        return result
+
+    spec = config_setting.coin_specs[coin_name]
+    standard = spec['diameter']
+    tol = spec['tol']
+
+    deviation = round(diameter_mm - standard, 2)
+    result['deviation'] = deviation
+    excess = round(abs(deviation) - tol, 2)#滤除浮点垃圾
+    if excess <= 0:
+        result['severity'] = '合格'
+        return result
+    if excess > 0:
+        result['direction'] = '偏大' if deviation>0 else '偏小'
+        if excess <= config_setting.grade_light:
+            result['severity'] = '轻度'
+        elif excess <= config_setting.grade_mid:
+            result['severity'] = '中度'
+        else:
+            result['severity'] = '重度'
+    return result

@@ -1,44 +1,45 @@
 import csv
 from openpyxl import Workbook
 
-def export_to_csv(all_results,filepath):
+def export_to_csv(all_results, filepath, coin_name):
     if not all_results:
         print("No results to export.")
         return
 
     with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(["图片编号", "硬币类型", "面积", "周长", "圆度", "直径(像素)", "缺陷"])
-        for i, result in enumerate(all_results):
-            for item in result:
-                defects_str = ','.join(item['defects']) if item['defects'] else '无'
+        writer.writerow(["图片编号", "面额", "直径(mm)", "圆度", "偏差(mm)", "方向", "严重程度"])
+        for i, frame in enumerate(all_results):
+            for item in frame:
                 writer.writerow([
                     i + 1,
-                    item['coin_type'],
-                    item['features']['area'],
-                    item['features']['perimeter'],
-                    round(item['features']['circularity'], 3),
-                    item['features']['diameter_pixels'],
-                    defects_str
+                    coin_name,
+                    item['diameter_mm'],
+                    item['result']['circularity'],
+                    item['result']['deviation'],
+                    item['result']['direction'],
+                    item['result']['severity']
                 ])
         print(f"检测报告已成功导出到{filepath}")
 
-def export_to_excel(all_results, filepath):
+def export_to_excel(all_results, filepath, coin_name):
     if not all_results:
         print("No results to export.")
         return
     wb = Workbook()
     ws = wb.active
-    ws.append(["图片编号", "硬币类型", "面积", "周长", "圆度", "直径(像素)", "缺陷"])
-    for i, result in enumerate(all_results):
-        for item in result:
-            defects_str = ','.join(item['defects']) if item['defects'] else '无'
-            ws.append([i + 1, 
-                    item['coin_type'], 
-                    item['features']['area'], 
-                    item['features']['perimeter'], 
-                    round(item['features']['circularity'], 3), 
-                    item['features']['diameter_pixels'], 
-                    defects_str])
+    ws.append(["图片编号", "面额", "直径(mm)", "圆度", "偏差(mm)", "方向", "严重程度"])
+    for i, frame in enumerate(all_results):
+        for item in frame:
+            ws.append([
+                    i + 1,
+                    coin_name,
+                    item['diameter_mm'],
+                    item['result']['circularity'],
+                    item['result']['deviation'],
+                    item['result']['direction'],
+                    item['result']['severity']
+                ])
     wb.save(filepath)
     print(f"检测报告已成功导出到{filepath}")
+    

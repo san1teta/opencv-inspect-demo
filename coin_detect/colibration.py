@@ -1,5 +1,5 @@
-class pixel_to_mm_calibrator:
-    def __init__(self, pixels_per_mm):
-        self.ppm = pixels_per_mm
+class Calibrator:
+    def __init__(self, ppm):
+        self.ppm = ppm
     def pixels_to_mm(self, pixels):
         return pixels/self.ppm
