@@ -12,20 +12,17 @@ from batch_loader import load_images_from_folder
 from camera_capture import start_camera_loop
 import cv2
 import os
+import sys
 
-img_path = r"D:\vscode_workplace\pre_pics"
-output_path = r"D:\vscode_workplace\pre_pics\result"
-csv_path = os.path.join(output_path, "coin_detect_report.csv")
-excel_path = os.path.join(output_path, "coin_detect_report.xlsx") 
 
 cal = colibration.Calibrator(config_setting.ppm)
 
 def process_single_frame(frame, coin_name):
     """单帧定义"""
     gray_img = preprocess.gray(frame)
-    blur_img = preprocess.gaussian_blur(gray_img)
-    edge_img = preprocess.canny(blur_img)
-    contours = detector.find_contours(edge_img)
+    blur_img = preprocess.gaussian_blur(gray_img, config_setting.gaussion_kernel)
+    edge_img = preprocess.canny(blur_img, config_setting.canny_low, config_setting.canny_high)
+    contours = detector.find_contours(edge_img, config_setting.min_area)
     all_features = []
     for cnt in contours:
         features = detector.calculate_features(cnt)
@@ -45,13 +42,20 @@ def process_single_frame(frame, coin_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="batch")
+    parser.add_argument("--mode", type=str, default="batch", choices=["batch", "camera"])
     parser.add_argument("--coin", type=str, required=True, choices=["1元", "5角", "1角"])
+    parser.add_argument("--input", "-i", type=str, help="待检测图片文件夹")
+    parser.add_argument("--output", "-o", type=str, help="输出图片路径")
     args = parser.parse_args()
 
     if args.mode == "batch":
+        if not args.input:
+            sys.exit("请输入图片路径")
+        output_path = args.output or os.path.join(args.input, "result")
         print("进入批量模式...")
-        imgs = load_images_from_folder(img_path)
+        imgs = load_images_from_folder(args.input)
+        if not imgs:
+            sys.exit("没有找到任何图片")
         os.makedirs(output_path, exist_ok=True)
         all_results = []
         for i, img in enumerate(imgs):
@@ -60,8 +64,8 @@ if __name__ == "__main__":
             cv2.imwrite(os.path.join(output_path, f"result_{i}.jpg"), result_img) 
             all_results.append(all_features) 
             print(f"处理完成第{i+1}张图片")
-        exporter.export_to_csv(all_results, csv_path, args.coin)
-        exporter.export_to_excel(all_results, excel_path, args.coin)
+        exporter.export_to_csv(all_results, os.path.join(output_path, "coin_detect_report.csv"),args.coin)
+        exporter.export_to_excel(all_results, os.path.join(output_path, "coin_detect_report.xlsx"), args.coin)
     else:
         print("进入实时模式...")
         start_camera_loop(lambda frame: process_single_frame(frame, args.coin)[0])

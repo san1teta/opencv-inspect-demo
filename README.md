@@ -43,19 +43,23 @@
 ## 快速开始
 
 ```bash
-pip install opencv-python numpy openpyxl
+pip install -r requirements.txt
+cd coin_detect
 
-# 批量模式：检测文件夹内图片并导出报表
-python main.py --mode batch --coin 1元
+# 批量模式：检测指定文件夹内图片并导出报表（结果默认输出到 <input>/result）
+python main.py --mode batch --coin 1元 --input <图片文件夹>
 
 # 实时模式：摄像头逐帧检测，按 q 退出
 python main.py --mode camera --coin 1元
 ```
 
+
 | 参数 | 说明 | 可选值 |
 | :--- | :--- | :--- |
 | `--mode` | 运行模式 | `batch`（默认）/ `camera` |
 | `--coin` | 被检面额（必填） | `1元` / `5角` / `1角` |
+| `--input` / `-i` | 批量模式：待检测图片文件夹（batch 必填） | 任意路径 |
+| `--output` / `-o` | 结果输出文件夹（选填，默认 `<input>/result`） | 任意路径 |
 
 ## 判定逻辑
 
