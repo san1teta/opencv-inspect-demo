@@ -1,6 +1,8 @@
 import cv2
+import numpy as np
+from typing import Callable
 
-def start_camera_loop(process_func):
+def start_camera_loop(process_func: Callable[[np.ndarray], np.ndarray]) -> None:
     cap = cv2.VideoCapture(0) 
     while cap.isOpened():
         ret, frame = cap.read() 

@@ -1,4 +1,6 @@
 import cv2
+import numpy as np
+from typing import Any
 color_map = {
     '合格': (0, 255, 0),
     '轻度': (0, 255, 255),
@@ -6,8 +8,8 @@ color_map = {
     '重度': (0, 0, 255)
 }
 
-def draw_result(img, all_features):# all_features：'contour': cnt,'diameter_mm': diameter_mm,'result': result
-    output = img.copy()
+def draw_result(img: np.ndarray, all_features: list[dict[str, Any]]) -> np.ndarray:
+    output_img = img.copy()
     for i in all_features:
         cnt = i['contour']
         x, y, w, h = cv2.boundingRect(cnt)
@@ -21,6 +23,6 @@ def draw_result(img, all_features):# all_features：'contour': cnt,'diameter_mm'
             else:
                 label = f"{i['result']['direction']}-{i['result']['severity']}"
 
-        cv2.rectangle(output, (x, y), (x+w, y+h), color, 2)
-        cv2.putText(output, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    return output
+        cv2.rectangle(output_img, (x, y), (x+w, y+h), color, 2)
+        cv2.putText(output_img, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    return output_img
