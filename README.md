@@ -40,6 +40,17 @@
 | `batch_loader.py` | 批量读图 |
 | `camera_capture.py` | 摄像头采集循环 |
 
+## 目录结构
+
+```
+opencv-inspect-demo/
+├── coin_detect/          # 核心代码
+├── test_data/            # 测试图片（本地）
+├── examples/             # 示例结果（本地）
+├── requirements.txt      # 依赖包
+└── README.md            # 项目说明
+```
+
 ## 快速开始
 
 ```bash
