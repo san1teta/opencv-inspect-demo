@@ -1,4 +1,4 @@
-gaussion_kernel = 5
+gaussian_kernel = 5
 canny_low = 50
 canny_high = 150
 min_area = 100

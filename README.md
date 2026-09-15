@@ -29,11 +29,12 @@
 
 | 文件 | 职责 |
 | :--- | :--- |
-| `main.py` | 入口：参数解析 + 流程串联 |
+| `main.py` | 入口：参数解析 + 模式分发 |
+| `pipeline.py` | 业务编排：单帧检测 + 批量处理 |
 | `config_setting.py` | 集中参数（图像处理 / 标定 / 判定 / 规格） |
 | `preprocess.py` | 灰度化、高斯模糊、Canny |
 | `detector.py` | 轮廓查找 + 几何特征计算 |
-| `colibration.py` | 像素 → 毫米 标定换算 |
+| `calibration.py` | 像素 → 毫米 标定换算 |
 | `defect_analyzer.py` | 质量判定 + 等级划分 |
 | `visualizer.py` | 结果可视化（分级配色 + 标签） |
 | `exporter.py` | CSV / Excel 报表导出 |
@@ -45,10 +46,11 @@
 ```
 opencv-inspect-demo/
 ├── coin_detect/          # 核心代码
-├── test_data/            # 测试图片（本地）
+├── tests/                # 单元测试
+├── sample_test/          # 测试图片（本地）
 ├── examples/             # 示例结果（本地）
 ├── requirements.txt      # 依赖包
-└── README.md            # 项目说明
+└── README.md             # 项目说明
 ```
 
 ## 快速开始
