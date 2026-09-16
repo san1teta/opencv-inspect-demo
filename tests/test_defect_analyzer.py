@@ -33,5 +33,6 @@ class TestJudgeQuality(unittest.TestCase):
     def test_5角硬币(self):
         result = judge_quality(20.5, 0.95, '5角')
         self.assertEqual(result['severity'], '合格')
+
 if __name__ == '__main__':
     unittest.main()
