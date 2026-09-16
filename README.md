@@ -17,6 +17,7 @@
 - 像素 → 毫米标定换算
 - 四级缺陷分级 + 分级配色可视化（绿/黄/橙/红）
 - 批量导出 CSV / Excel 检测报表
+- **结果可追溯**：结果图与报表保留原图文件名，未检出目标也单独成行，可逐条回查
 
 ## 处理流程
 
@@ -37,8 +38,8 @@
 | `calibration.py` | 像素 → 毫米 标定换算 |
 | `defect_analyzer.py` | 质量判定 + 等级划分 |
 | `visualizer.py` | 结果可视化（分级配色 + 标签） |
-| `exporter.py` | CSV / Excel 报表导出 |
-| `batch_loader.py` | 批量读图 |
+| `exporter.py` | CSV / Excel 报表导出（未检出目标也占一行） |
+| `batch_loader.py` | 批量读图，返回 `{path, name, stem, image}` 记录 |
 | `camera_capture.py` | 摄像头采集循环 |
 
 ## 目录结构
@@ -74,6 +75,23 @@ python main.py --mode camera --coin 1元
 | `--input` / `-i` | 批量模式：待检测图片文件夹（batch 必填） | 任意路径 |
 | `--output` / `-o` | 结果输出文件夹（选填，默认 `<input>/result`） | 任意路径 |
 
+### 运行测试
+
+```bash
+cd tests
+python -m unittest discover -p "test_*.py"     # 标准库 unittest，无需 pytest
+```
+
+## 检测报表
+
+输出目录内含 `result_NNN_<原图名>.jpg` 结果图与 `coin_detect_report.csv` / `.xlsx`，列如下：
+
+| 序号 | 图片名称 | 面额 | 直径(mm) | 圆度 | 偏差(mm) | 方向 | 严重程度 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+
+- **序号与结果图文件名中的 `NNN` 严格一致**，可逐条回查到原图
+- 某张图未检出任何目标时，仍输出一行「未检出」，不会从报表中消失
+
 ## 判定逻辑
 
 1. **圆度**：`4π·面积 / 周长²`（理想圆为 1.0），低于 `min_circularity` 判形状不合格
@@ -104,6 +122,7 @@ python main.py --mode camera --coin 1元
 
 - `ppm` 当前为演示假定值，需用已知尺寸物体实拍标定后替换
 - 声明制需运行前指定面额；若放错币种，会判为「尺寸严重超差」而非主动防错
+- 分级逻辑目前仅在**非硬币**图片上跑通流程；真实硬币数据上的分级准确性（合格/轻度/中度/重度的实际触发）待实测
 
 ## 后续计划
 
