@@ -2,7 +2,7 @@ import config_setting
 from typing import Any
 
 def judge_quality(diameter_mm: float, circularity: float, coin_name: str) -> dict[str, Any]:
-    result = {
+    result: dict[str, Any] = {
         'circularity': '合格',
         'direction':'未检测',
         'severity':'未检测',

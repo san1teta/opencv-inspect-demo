@@ -1,3 +1,7 @@
 {
-    "extraPaths": ["coin_detect"]
+    "extraPaths": ["coin_detect"],
+    "typeCheckingMode": "standard",
+    "reportUnusedVariable": "warning",
+    "reportPrivateUsage": false
 }
+

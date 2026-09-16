@@ -11,7 +11,6 @@ def calculate_features(contour:np.ndarray) -> dict[str, Any]:
     perimeter = cv2.arcLength(contour,True)
     circularity = (4*np.pi*area/perimeter**2) if perimeter > 0 else 0
 
-    x,y,w,h = cv2.boundingRect(contour)
     (cx,cy),radius = cv2.minEnclosingCircle(contour)
 
     return{'area':area,
