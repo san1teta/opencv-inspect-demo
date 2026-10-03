@@ -8,6 +8,7 @@ import ctypes
 import logging
 import os
 import sys
+from ctypes import wintypes
 from typing import TypedDict
 
 import cv2
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 COLS = 10                      # 方格列数
 ROWS = 7                       # 方格行数
 INNER = (COLS - 1, ROWS - 1)   # 内角点数，最外圈方格没有内侧交点
+
+TITLEBAR_PX = 32  # OpenCV HighGUI 窗口标题栏占高，Windows 10 约 31px
+SPI_GETWORKAREA = 0x30  # SystemParametersInfoW：取已扣掉任务栏的工作区
 
 
 class Preset(TypedDict):
@@ -30,7 +34,7 @@ class Preset(TypedDict):
 
 # square_mm 是名义值，打印/显示后必须用钢尺复核
 PRESETS: dict[str, Preset] = {
-    'screen': {'square_px': 120, 'margin_px': 120, 'dpi': None, 'square_mm': None,
+    'screen': {'square_px': 100, 'margin_px': 100, 'dpi': None, 'square_mm': None,
                'hint': '笔记本屏幕 1:1 显示，配 --show 用；量到的毫米数 ÷ 10 才是真 square_mm'},
     'print': {'square_px': 295, 'margin_px': 118, 'dpi': 300, 'square_mm': 25.0,
               'hint': 'A4 横向、25mm/格、缩放选 100%/实际大小；打印店取件先用钢尺复核'},
@@ -81,8 +85,25 @@ def make_process_dpi_aware() -> None:
         ctypes.windll.user32.SetProcessDPIAware()
 
 
+def _work_area() -> tuple[int, int]:
+    """主显示器工作区像素尺寸（已扣任务栏）。
+
+    GetSystemMetrics(78/79) 本机实测返回全屏 1920x1080，不可信 → 必须走 SPI_GETWORKAREA。
+    """
+    user32 = ctypes.windll.user32
+    rect = wintypes.RECT()
+    if not user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+        sys.exit("读不到工作区尺寸，无法校验板子会不会被裁切")
+    return int(rect.right), int(rect.bottom)
+
+
 def show_1to1(img: np.ndarray, title: str) -> None:
     """按原始像素尺寸显示（WINDOW_AUTOSIZE 不缩放），q 退出。"""
+    h, w = img.shape[:2]
+    aw, ah = _work_area()
+    if w > aw or h + TITLEBAR_PX > ah:
+        sys.exit(f"板子 {w}x{h}px 放不下工作区 {aw}x{ah}px（标题栏另占 {TITLEBAR_PX}px），"
+                 f"底部方格会被切掉 → 把该 preset 的 square_px 改小再生成")
     make_process_dpi_aware()
     cv2.namedWindow(title, cv2.WINDOW_AUTOSIZE)
     cv2.imshow(title, img)
