@@ -16,6 +16,6 @@ def calculate_features(contour:np.ndarray) -> dict[str, Any]:
     return{'area':area,
            'perimeter':perimeter,
            'circularity':circularity,
-           'diameter_pixels':int(2*radius),
+           'diameter_pixels':float(2*radius),
            'center':(int(cx),int(cy))
            }
