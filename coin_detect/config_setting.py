@@ -4,6 +4,7 @@ canny_high = 150
 min_area = 100
 
 ppm = 10.0  #待测定
+calib_image_size = (0, 0)  # 标定所用图像的(宽,高)；(0,0)=未标定。测量图必须与此一致，否则ppm不适用
 
 min_circularity = 0.9  #1是正圆，过/不过
 grade_light = 0.3  #刀口1，0 < 超出量 ≤ 0.3 → 轻度

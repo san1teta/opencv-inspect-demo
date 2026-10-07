@@ -23,17 +23,27 @@ DEFAULT_CONFIG = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'coin_detect', 'config_setting.py'))
 
 
-def write_ppm(config_path: str, ppm: float) -> str:
-    """把 ppm 写进 config_setting.py 的那一行，返回替换后的整行文本。"""
+def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int]) -> list[str]:
+    """把 ppm 和标定图尺寸写进 config_setting.py，返回改动后的行文本。"""
     with open(config_path, encoding='utf-8') as f:
         text = f.read()
-    line = f"ppm = {ppm:.4f}  # A4 实测于 {datetime.date.today().isoformat()}，旧值 10.0 是演示假定值"
-    new_text, n = re.subn(r'(?m)^ppm\s*=.*$', line, text, count=1)
-    if n == 0:
-        raise ValueError(f"{config_path} 里找不到 ppm 那一行，没敢改")
+    today = datetime.date.today().isoformat()
+    targets = [
+        (r'(?m)^ppm\s*=',
+         f"ppm = {ppm:.4f}  # A4 实测于 {today}，旧值 10.0 是演示假定值"),
+        (r'(?m)^calib_image_size\s*=',
+         f"calib_image_size = ({img_size[0]}, {img_size[1]})"
+         f"  # 标定图宽高，测量图必须与此一致"),
+    ]
+    changed: list[str] = []
+    for pattern, line in targets:
+        text, n = re.subn(pattern + r'.*$', line, text, count=1)
+        if n == 0:
+            raise ValueError(f"{config_path} 里找不到 {pattern[4:-2]} 那一行，没敢改")
+        changed.append(line)
     with open(config_path, 'w', encoding='utf-8') as f:
-        f.write(new_text)
-    return line
+        f.write(text)
+    return changed
 
 
 def main() -> None:
@@ -57,6 +67,9 @@ def main() -> None:
         m = calibration.measure_a4(img, args.long, args.short, args.tol)
     except ValueError as exc:
         sys.exit(f"标定不合格：{exc}")
+
+    h, w = img.shape[:2]
+    logger.info(f"标定图尺寸 {w}x{h}px —— 之后所有待测图必须是同一尺寸，否则 ppm 不适用")
     logger.info(f"长边 {m['long_px']:.1f}px → {m['ppm_long']:.4f} ppm | "
                 f"短边 {m['short_px']:.1f}px → {m['ppm_short']:.4f} ppm")
     logger.info(f"长宽比 {m['aspect']:.4f}（A4 应为 {calibration.A4_ASPECT:.4f}，"
@@ -64,7 +77,8 @@ def main() -> None:
     logger.info(f"ppm = {m['ppm']:.4f}  （即 1 px = {1000 / m['ppm']:.1f} µm）")
 
     if args.write:
-        logger.info("已写入: " + write_ppm(args.config, m['ppm']))
+        for line in write_ppm(args.config, m['ppm'], (w, h)):
+            logger.info("已写入: " + line)
 
 
 if __name__ == "__main__":

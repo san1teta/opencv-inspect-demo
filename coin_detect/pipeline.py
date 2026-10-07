@@ -45,6 +45,10 @@ def run_batch(input_path: str, output_path: str, coin_name: str) -> list[dict[st
     os.makedirs(output_path, exist_ok=True)
     all_results = []
     for i, item in enumerate(imgs, start = 1):
+        h, w = item['image'].shape[:2]
+        if tuple(config_setting.calib_image_size) != (0, 0) and (w, h) != tuple(config_setting.calib_image_size):
+            logger.warning(f"第{i}张图尺寸 {w}x{h} 与标定图 {tuple(config_setting.calib_image_size)} 不一致，"
+                           f"ppm 不适用，直径会算错")
         logger.info(f"开始处理第{i}张图片...") 
         result_img, detections = process_single_frame(item['image'], coin_name)
         out_name = f"result_{i:03d}_{item['stem']}.jpg"
