@@ -4,6 +4,7 @@
 """
 import argparse
 import os
+import re
 import sys
 
 import cv2
@@ -63,12 +64,35 @@ def main() -> None:
     print(f"纸的像素边长 {long_px:.0f}px = {args.long}mm → 1px = "
           f"{1000 * args.long / long_px:.1f} µm")
 
+    ratio = long_px / short_px
+    diff = abs(long_px / args.long - short_px / args.short) / (long_px / args.long)
+    bright = cv2.countNonZero(binary) / (w * h)
+    stray = bright - areas[0] / (w * h)
+    margin = (box[:, 0].min() > 20 and box[:, 1].min() > 20
+              and box[:, 0].max() < w - 20 and box[:, 1].max() < h - 20)
+    checks = [
+        ('轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
+        (f'长宽比 {calibration.A4_ASPECT:.4f} ±0.5%',
+         abs(ratio - calibration.A4_ASPECT) / calibration.A4_ASPECT <= 0.005, f'{ratio:.4f}'),
+        ('长短边 ppm 互差 < 1%', diff < 0.01, f'{diff * 100:.2f}%'),
+        ('外接矩形四角都在画面内', margin,
+         f"x {box[:, 0].min():.0f}~{box[:, 0].max():.0f} y {box[:, 1].min():.0f}~{box[:, 1].max():.0f}"),
+        ('亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),
+    ]
+    print('判卷：')
+    for name, ok, value in checks:
+        print(f"  {'PASS' if ok else 'FAIL'}  {name:<28} 实测 {value}")
+    print('结论：' + ('合格，可以拿去标定' if all(c[1] for c in checks)
+                     else '不合格，按上面 FAIL 项重拍'))
+
     vis = cv2.resize(img, (1000, int(h * 1000 / w)))
     scale = 1000 / w
     cv2.drawContours(vis, [np.round(paper * scale).astype(np.int32)], 0, (0, 255, 0), 2)
     cv2.drawContours(vis, [np.round(box * scale).astype(np.int32)], 0, (0, 0, 255), 2)
+    stem = os.path.splitext(os.path.basename(args.image))[0]
+    ascii_stem = re.sub(r'[^0-9A-Za-z_.-]', '', stem)[-24:] or 'a4'   # 中文名 cv2.imwrite 不保证能写
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.image)),
-                                   f"diag_{os.path.splitext(os.path.basename(args.image))[0]}.jpg")
+                                   f"diag_{ascii_stem}.jpg")
     if not cv2.imwrite(out, vis):
         raise RuntimeError(f"标注图写盘失败: {out}")
     print(f"标注图（绿=选中轮廓，红=外接矩形）: {out}")
