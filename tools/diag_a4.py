@@ -50,6 +50,7 @@ def main() -> None:
     box = cv2.boxPoints(rect)
     fill = cv2.contourArea(paper) / (rw * rh) if rw * rh > 0 else 0.0
 
+    print('—— 以下是 Otsu 备用算子的内部指标，最终判卷以下方「标定算子」那行为准 ——')
     print(f"画面 {w}x{h} | Otsu 阈值 {thr:.0f} | 亮区占画面 "
           f"{cv2.countNonZero(binary) / (w * h) * 100:.1f}%")
     print(f"轮廓数 {len(contours)} | 前几大轮廓占画面% "
@@ -62,28 +63,28 @@ def main() -> None:
     print(f"矩形角点 x {box[:, 0].min():.0f}~{box[:, 0].max():.0f} (画面 0~{w}) | "
           f"y {box[:, 1].min():.0f}~{box[:, 1].max():.0f} (画面 0~{h})")
     print(f"纸的像素边长 {long_px:.0f}px = {args.long}mm → 1px = "
-          f"{1000 * args.long / long_px:.1f} µm")
+          f"{1000 * args.long / long_px:.1f} 微米")   # 别用 µ，GBK 控制台一接管道就崩
 
-    ratio = long_px / short_px
-    diff = abs(long_px / args.long - short_px / args.short) / (long_px / args.long)
     bright = cv2.countNonZero(binary) / (w * h)
     stray = bright - areas[0] / (w * h)
-    margin = (box[:, 0].min() > 20 and box[:, 1].min() > 20
-              and box[:, 0].max() < w - 20 and box[:, 1].max() < h - 20)
+    m = calibration.measure_a4(img, args.long, args.short, 99.0)   # 放宽阈值拿全部数字，判卷在下面自己下
+    m_diff = abs(m['ppm_long'] - m['ppm_short']) / m['ppm_long']
+    span = m['long_px'] / max(w, h)
     checks = [
-        ('轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
-        (f'长宽比 {calibration.A4_ASPECT:.4f} ±0.5%',
-         abs(ratio - calibration.A4_ASPECT) / calibration.A4_ASPECT <= 0.005, f'{ratio:.4f}'),
-        ('长短边 ppm 互差 < 1%', diff < 0.01, f'{diff * 100:.2f}%'),
-        ('外接矩形四角都在画面内', margin,
-         f"x {box[:, 0].min():.0f}~{box[:, 0].max():.0f} y {box[:, 1].min():.0f}~{box[:, 1].max():.0f}"),
-        ('亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),
+        ('FAIL', f"长宽比 {calibration.A4_ASPECT:.4f} ±0.5%",
+         abs(m['aspect'] - calibration.A4_ASPECT) / calibration.A4_ASPECT <= 0.005, f"{m['aspect']:.4f}"),
+        ('FAIL', '长短边 ppm 互差 < 1%', m_diff < 0.01, f'{m_diff * 100:.2f}%'),
+        ('WARN', '轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
+        ('WARN', '亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),
+        ('WARN', '纸占画面长边 < 95%（太满易裁角）', span < 0.95, f'{span * 100:.1f}%'),
     ]
-    print('判卷：')
-    for name, ok, value in checks:
-        print(f"  {'PASS' if ok else 'FAIL'}  {name:<28} 实测 {value}")
-    print('结论：' + ('合格，可以拿去标定' if all(c[1] for c in checks)
-                     else '不合格，按上面 FAIL 项重拍'))
+    print(f"标定算子：{m['method']} | ppm_long {m['ppm_long']:.4f} | ppm_short {m['ppm_short']:.4f}"
+          f" | 采用 ppm {m['ppm']:.4f}")
+    print('判卷（WARN 只是提醒，不影响结论；杂亮高但长宽比/互差都过 = 杂物没粘连，可用）：')
+    for level, name, ok, value in checks:
+        print(f"  {'PASS' if ok else level:<4} {name:<34} 实测 {value}")
+    hard_fail = any(not c[2] for c in checks if c[0] == 'FAIL')
+    print('结论：' + ('不合格，按上面 FAIL 项重拍' if hard_fail else '合格，可以拿去标定'))
 
     vis = cv2.resize(img, (1000, int(h * 1000 / w)))
     scale = 1000 / w

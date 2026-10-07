@@ -74,7 +74,7 @@ def main() -> None:
                 f"短边 {m['short_px']:.1f}px → {m['ppm_short']:.4f} ppm")
     logger.info(f"长宽比 {m['aspect']:.4f}（A4 应为 {calibration.A4_ASPECT:.4f}，"
                 f"差 {abs(m['aspect'] - calibration.A4_ASPECT) / calibration.A4_ASPECT * 100:.2f}%）")
-    logger.info(f"ppm = {m['ppm']:.4f}  （即 1 px = {1000 / m['ppm']:.1f} µm）")
+    logger.info(f"ppm = {m['ppm']:.4f}  （即 1 px = {1000 / m['ppm']:.1f} 微米）")
 
     if args.write:
         for line in write_ppm(args.config, m['ppm'], (w, h)):
