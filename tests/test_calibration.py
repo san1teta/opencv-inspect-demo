@@ -62,6 +62,29 @@ class TestMeasureA4(unittest.TestCase):
             measure_a4(img)
 
 
+class TestVerifyPpm(unittest.TestCase):
+    """期间核查：只报警、不参与测量，所以它绝不能把整批处理打断。"""
+
+    def test_skips_quietly_when_no_paper(self):
+        import pipeline
+        img = np.zeros((200, 200, 3), np.uint8)
+        with self.assertLogs('pipeline', level='DEBUG') as cm:
+            pipeline.verify_ppm(1, img)
+        self.assertTrue(any('跳过期间核查' in m for m in cm.output))
+
+    def test_warns_when_setup_drifted(self):
+        import pipeline
+        import config_setting
+        original = config_setting.ppm
+        config_setting.ppm = 10.0
+        try:
+            with self.assertLogs('pipeline', level='INFO') as cm:
+                pipeline.verify_ppm(1, synthetic_a4())   # 合成图真值 4.0，偏差 60%
+            self.assertTrue(any('装置可能漂移' in m for m in cm.output))
+        finally:
+            config_setting.ppm = original
+
+
 if __name__ == '__main__':
     unittest.main()
 

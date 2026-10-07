@@ -13,16 +13,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'coin_detect')))
 
 import calibration  # noqa: E402
-
-
-def read_image(path: str) -> np.ndarray:
-    """中文路径 cv2.imread 读不了（会按 ANSI 解码），必须用 imdecode 兜底。"""
-    img = cv2.imread(path)
-    if img is None:
-        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        raise FileNotFoundError(f"读不到图片: {path}")
-    return img
+import image_io  # noqa: E402
 
 
 def main() -> None:
@@ -33,7 +24,7 @@ def main() -> None:
     ap.add_argument("--out", default="", help="标注图输出路径，默认同目录 diag_*.jpg")
     args = ap.parse_args()
 
-    img = read_image(args.image)
+    img = image_io.read_image(args.image)
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     thr, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)

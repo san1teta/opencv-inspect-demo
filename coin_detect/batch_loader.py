@@ -1,7 +1,7 @@
 import os
-import cv2
 import glob
 import logging
+import image_io
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,9 @@ def load_images_from_folder(folder_path: str) -> list[dict[str, Any]]:
     paths.sort()
     items = []
     for p in paths:
-        img = cv2.imread(p)
-        if img is None:
+        try:
+            img = image_io.read_image(p)
+        except FileNotFoundError:
             logger.warning(f"无法读取图像: {p}")
             continue
         name = os.path.basename(p)

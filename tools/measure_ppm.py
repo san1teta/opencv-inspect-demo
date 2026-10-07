@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'coin_detect')))
 
 import calibration  # noqa: E402
-from diag_a4 import read_image  # noqa: E402
+import image_io  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        img = read_image(args.image)
+        img = image_io.read_image(args.image)
     except FileNotFoundError as exc:
         sys.exit(str(exc))
 

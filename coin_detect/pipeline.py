@@ -4,13 +4,13 @@ import config_setting
 import defect_analyzer
 import visualizer
 import calibration
+import image_io
 from batch_loader import load_images_from_folder
 
 import logging
 import numpy as np
 from typing import Any
 import os
-import cv2
 import sys
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,25 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
 
     return detect_visualize, all_features
 
+def verify_ppm(index: int, frame: np.ndarray) -> None:
+    """期间核查：量本图里那张 A4 的 ppm，与锁定的标定值比对。
+
+    只报警、不参与计算 —— 直径永远用 config_setting.ppm，保持「标定一次不改动」的工业口径。
+    图里没有可信的 A4（被遮挡/没入画）就静默跳过，不算错误。
+    """
+    try:
+        ppm_now = calibration.measure_a4(frame)['ppm']
+    except ValueError:
+        logger.debug(f"第{index}张图里没有可信的 A4 纸，跳过期间核查")
+        return
+    drift = abs(ppm_now - config_setting.ppm) / config_setting.ppm
+    if drift > config_setting.ppm_check_tol:
+        logger.warning(f"第{index}张图期间核查：本图实测 {ppm_now:.3f} ppm，"
+                       f"与标定值 {config_setting.ppm:.3f} 差 {drift * 100:.1f}%，装置可能漂移")
+    else:
+        logger.info(f"第{index}张图期间核查通过：本图实测 {ppm_now:.3f} ppm，偏差 {drift * 100:.1f}%")
+
+
 def run_batch(input_path: str, output_path: str, coin_name: str) -> list[dict[str,Any]]:
     imgs = load_images_from_folder(input_path)
     if not imgs:
@@ -50,9 +69,10 @@ def run_batch(input_path: str, output_path: str, coin_name: str) -> list[dict[st
             logger.warning(f"第{i}张图尺寸 {w}x{h} 与标定图 {tuple(config_setting.calib_image_size)} 不一致，"
                            f"ppm 不适用，直径会算错")
         logger.info(f"开始处理第{i}张图片...") 
+        verify_ppm(i, item['image'])
         result_img, detections = process_single_frame(item['image'], coin_name)
         out_name = f"result_{i:03d}_{item['stem']}.jpg"
-        if not cv2.imwrite(os.path.join(output_path, out_name), result_img):
+        if not image_io.write_image(os.path.join(output_path, out_name), result_img):
             logger.error(f"结果图写入失败: {out_name}") 
         all_results.append({
             'index': i,
