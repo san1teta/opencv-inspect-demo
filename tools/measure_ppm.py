@@ -12,11 +12,10 @@ import os
 import re
 import sys
 
-import cv2
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'coin_detect')))
 
 import calibration  # noqa: E402
+from diag_a4 import read_image  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +48,15 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="配置文件路径")
     args = parser.parse_args()
 
-    img = cv2.imread(args.image)
-    if img is None:
-        sys.exit(f"读不到图片: {args.image}")
+    try:
+        img = read_image(args.image)
+    except FileNotFoundError as exc:
+        sys.exit(str(exc))
 
-    m = calibration.measure_a4(img, args.long, args.short, args.tol)
+    try:
+        m = calibration.measure_a4(img, args.long, args.short, args.tol)
+    except ValueError as exc:
+        sys.exit(f"标定不合格：{exc}")
     logger.info(f"长边 {m['long_px']:.1f}px → {m['ppm_long']:.4f} ppm | "
                 f"短边 {m['short_px']:.1f}px → {m['ppm_short']:.4f} ppm")
     logger.info(f"长宽比 {m['aspect']:.4f}（A4 应为 {calibration.A4_ASPECT:.4f}，"
