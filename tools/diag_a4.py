@@ -40,6 +40,13 @@ def main() -> None:
     long_px, short_px = max(rw, rh), min(rw, rh)
     box = cv2.boxPoints(rect)
     fill = cv2.contourArea(paper) / (rw * rh) if rw * rh > 0 else 0.0
+    expect_aspect = args.long / args.short   # 用实测边长算，别用名义 297/210
+
+    mask = np.zeros(gray.shape, np.uint8)
+    cv2.drawContours(mask, [paper], -1, 255, -1)
+    inside = gray[mask > 0]
+    mean_in = float(inside.mean()) if inside.size else 0.0
+    clipped = float((inside >= 255).mean() * 100) if inside.size else 0.0
 
     print('—— 以下是 Otsu 备用算子的内部指标，最终判卷以下方「标定算子」那行为准 ——')
     print(f"画面 {w}x{h} | Otsu 阈值 {thr:.0f} | 亮区占画面 "
@@ -50,7 +57,9 @@ def main() -> None:
           f"轮廓/矩形填充率 {fill * 100:.1f}%（矩形纸应 >95%）")
     print(f"ppm_long {long_px / args.long:.4f} | ppm_short {short_px / args.short:.4f} | "
           f"互差 {abs(long_px / args.long - short_px / args.short) / (long_px / args.long) * 100:.2f}%")
-    print(f"长宽比 {long_px / short_px:.4f}（A4 应为 {calibration.A4_ASPECT:.4f}）")
+    print(f"长宽比 {long_px / short_px:.4f}（本纸应为 {expect_aspect:.4f}）")
+    print(f"纸面平均灰度 {mean_in:.0f}（宜 150~240）| 饱和=255 占比 {clipped:.1f}%"
+          f"（宜 <5%，合成纯色图必然 100%，只看实拍）")
     print(f"矩形角点 x {box[:, 0].min():.0f}~{box[:, 0].max():.0f} (画面 0~{w}) | "
           f"y {box[:, 1].min():.0f}~{box[:, 1].max():.0f} (画面 0~{h})")
     print(f"纸的像素边长 {long_px:.0f}px = {args.long}mm → 1px = "
@@ -61,7 +70,6 @@ def main() -> None:
     m = calibration.measure_a4(img, args.long, args.short, 99.0)   # 放宽阈值拿全部数字，判卷在下面自己下
     m_diff = abs(m['ppm_long'] - m['ppm_short']) / m['ppm_long']
     span = m['long_px'] / max(w, h)
-    expect_aspect = args.long / args.short   # 用实测边长算，别用名义 297/210
     checks = [
         ('FAIL', f"长宽比 {expect_aspect:.4f} ±0.5%",
          abs(m['aspect'] - expect_aspect) / expect_aspect <= 0.005, f"{m['aspect']:.4f}"),
@@ -69,6 +77,8 @@ def main() -> None:
         ('WARN', '轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
         ('WARN', '亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),
         ('WARN', '纸占画面长边 < 95%（太满易裁角）', span < 0.95, f'{span * 100:.1f}%'),
+        ('WARN', '纸面平均灰度 150~240', 150 <= mean_in <= 240, f'{mean_in:.0f}'),
+        ('WARN', '纸面饱和=255 占比 < 5%', clipped < 5.0, f'{clipped:.1f}%'),
     ]
     print(f"标定算子：{m['method']} | ppm_long {m['ppm_long']:.4f} | ppm_short {m['ppm_short']:.4f}"
           f" | 采用 ppm {m['ppm']:.4f}")
@@ -86,7 +96,7 @@ def main() -> None:
     ascii_stem = re.sub(r'[^0-9A-Za-z_.-]', '', stem)[-24:] or 'a4'   # 中文名 cv2.imwrite 不保证能写
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.image)),
                                    f"diag_{ascii_stem}.jpg")
-    if not cv2.imwrite(out, vis):
+    if not image_io.write_image(out, vis):
         raise RuntimeError(f"标注图写盘失败: {out}")
     print(f"标注图（绿=选中轮廓，红=外接矩形）: {out}")
 
