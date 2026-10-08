@@ -13,7 +13,9 @@
 """
 import argparse
 import io
+import math
 import os
+import re
 import statistics
 import sys
 import time
@@ -51,21 +53,52 @@ def _one(img: np.ndarray, coin: str) -> tuple[dict | None, float]:
              'result': defect_analyzer.judge_quality(d, deficit, f['circularity'], coin)}, ms)
 
 
+def _part_id(stem: str) -> str:
+    """从文件名剥掉尾部序号得到「哪一枚」：a01/a02 -> a；r07 -> r。
+
+    所以命名规则是「前缀 = 第几枚，后缀 = 第几次重拍」。全部用 coin01..coin12 这种
+    名字会被归成一枚 —— 报告会原样列出分组结果，看一眼就能发现命名不对。
+    """
+    return re.sub(r'[\d_\-\.]+$', '', stem) or stem
+
+
 def _stats(folder: str, coin: str) -> dict | None:
     names = sorted(f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.jpeg', '.png')))
-    ds, defs, ms, grades = [], [], [], {}
+    ds, defs, ms, grades, parts = [], [], [], {}, {}
     for name in names:
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)
         ms.append(this_ms)
         if det is not None:
             ds.append(det['d'])
             defs.append(det['deficit'])
+            parts.setdefault(_part_id(os.path.splitext(name)[0]), []).append(det['d'])
             g = det['result']['severity']
             grades[g] = grades.get(g, 0) + 1
     if not names:
         return None
-    return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs,
+    return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs, 'parts': parts,
             'ms': ms, 'grades': grades, 'coin': coin}
+
+
+def _spread(s: dict) -> list[str]:
+    """把散布拆成「重复性」和「枚间差异」—— 这两个不能混在一个 σ 里报。"""
+    out = []
+    reps = {k: v for k, v in s['parts'].items() if len(v) > 1}
+    if reps:
+        # 合并样本方差：同一枚内的散布才是测量重复性，跨枚平均会混进币的差异
+        num = sum(statistics.variance(v) * (len(v) - 1) for v in reps.values())
+        den = sum(len(v) - 1 for v in reps.values())
+        lo, hi = min(len(v) for v in reps.values()), max(len(v) for v in reps.values())
+        out.append(f"      重复性 σ = {math.sqrt(num / den):.3f}mm"
+                   f"（{len(reps)} 枚 x 各 {lo if lo == hi else f'{lo}~{hi}'} 次，自由度 {den}）")
+    else:
+        out.append("      重复性 σ 算不出：没有一枚被重拍过两次以上（命名没区分枚，或没放 repeat）")
+    means = [statistics.fmean(v) for v in s['parts'].values()]
+    if len(means) > 1:
+        out.append(f"      枚间差异：{len(means)} 枚，均值极差 {max(means) - min(means):.3f}mm"
+                   f"  ← n={len(means)} 太小，只能报观测极差，不能当群体 σ 用")
+    return out
+
 
 
 def _fmt(s: dict) -> str:
@@ -108,12 +141,18 @@ def main() -> None:
     print('== 各面额 ==')
     for s in batches.values():
         print(_fmt(s))
-        if len(s['ds']) > 1:
+        for line in _spread(s):
+            print(line)
+        n_parts = len(s['parts'])
+        if n_parts >= 8 and len(s['ds']) > 1:
             mean, sd = statistics.fmean(s['ds']), statistics.stdev(s['ds'])
             out = [round(d, 3) for d in s['ds'] if abs(d - mean) > 3 * sd]
             if out:
-                print(f"      离群点(>3σ) {out}  ← 先确认不是拍糊或放偏")
-            print(f"      SPC 建议控制限 {mean - 3 * sd:.3f} ~ {mean + 3 * sd:.3f} mm")
+                print(f"      离群点(>3σ) {out}  ← 先确认不是拍糊、放偏，或那枚真有缺口")
+            print(f"      SPC 控制限 {mean - 3 * sd:.3f} ~ {mean + 3 * sd:.3f} mm")
+        else:
+            print(f"      SPC 控制限不出：只有 {n_parts} 枚（需 >=8 枚不同硬币），"
+                  f"重复拍的张数不能顶这个数 —— 同一枚的固定偏差不会随重拍平均掉")
 
     print('\n== 线性度（不需要卡尺的准确度证据）==')
     order = [c for c in ('1角', '5角', '1元') if len(batches.get(c, {}).get('ds', [])) > 1]
