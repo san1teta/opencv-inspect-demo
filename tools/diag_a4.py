@@ -91,8 +91,12 @@ def main() -> None:
         ('WARN', '纸面饱和=255 占比 < 5%', clipped < 5.0, f'{clipped:.1f}%'),
         ('WARN', '比例尺梯度（对边差）< 0.5%', grad < 0.005, f'{grad * 100:.2f}%'),
     ]
+    cx, cy = m['center']
     print(f"标定算子：{m['method']} | ppm_long {m['ppm_long']:.4f} | ppm_short {m['ppm_short']:.4f}"
           f" | 采用 ppm {m['ppm']:.4f}")
+    print(f"纸心 ({cx:.0f}, {cy:.0f}) | 画面中心 ({w // 2}, {h // 2}) —— 纸心在画面中心"
+          f"{'上' if cy < h / 2 else '下'} {abs(cy - h / 2) / m['ppm']:.0f}mm，"
+          f"待测物要对准纸心而不是画面中心（tools/check_placement.py 会量给你看）")
     if grad:
         # grad 是对边峰峰值，纸心↔纸边只吃一半；别把峰峰值当成中心偏差报，会虚高一倍
         half = grad * 25 / 2

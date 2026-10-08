@@ -13,12 +13,13 @@ def pixels_to_mm(pixels: float, ppm: float) -> float:
     return pixels / ppm
 
 
-def quad_sides(gray: np.ndarray) -> list[float] | None:
+def quad_sides(gray: np.ndarray) -> tuple[list[float], tuple[float, float]] | None:
     """边缘 + 四边形拟合找纸：主动忽略杂物（凳腿/木纹/锁边线都不是大四边形）。
 
-    返回按顶点顺序的 4 条边长（px），找不到可信四边形时返回 None。
+    返回 (按顶点顺序的 4 条边长, 四边形中心 xy)，找不到可信四边形时返回 None。
     边长原样吐出来而不是只吐长短边，是因为「对边是否相等」本身就是透视指标
-    （见 quad_pair_means / diag_a4 的比例尺梯度）。
+    （见 quad_pair_means / diag_a4 的比例尺梯度）。中心点则是「比例尺在哪儿成立」的
+    唯一参考位置 —— ppm 是四边均值，只在这个点上严格适用。
     """
     h, w = gray.shape
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
@@ -32,7 +33,8 @@ def quad_sides(gray: np.ndarray) -> list[float] | None:
         sides = [float(np.linalg.norm(p[i] - p[(i + 1) % 4])) for i in range(4)]
         if min(quad_pair_means(sides)) < 20:
             continue
-        return sides
+        c = p.mean(axis=0)
+        return sides, (float(c[0]), float(c[1]))
     return None
 
 
@@ -42,15 +44,15 @@ def quad_pair_means(sides: list[float]) -> tuple[float, float]:
     return max(a, b), min(a, b)
 
 
-def _bright_side_lengths(binary: np.ndarray) -> tuple[float, float, float]:
-    """备用算子：Otsu 二值化后取最大亮区的外接矩形。返回 (长边px, 短边px, 填充率)。"""
+def _bright_side_lengths(binary: np.ndarray) -> tuple[float, float, float, tuple[float, float]]:
+    """备用算子：Otsu 二值化后取最大亮区的外接矩形。返回 (长边px, 短边px, 填充率, 中心xy)。"""
     contours = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
     if not contours:
         raise ValueError("画面里没有亮区，找不到 A4 纸（背景必须比纸暗）")
     paper = max(contours, key=cv2.contourArea)
-    (_, _), (rw, rh), _angle = cv2.minAreaRect(paper)
+    (cx, cy), (rw, rh), _angle = cv2.minAreaRect(paper)
     fill = cv2.contourArea(paper) / (rw * rh) if rw * rh > 0 else 0.0
-    return max(rw, rh), min(rw, rh), fill
+    return max(rw, rh), min(rw, rh), fill, (float(cx), float(cy))
 
 
 class A4Measurement(TypedDict):
@@ -64,6 +66,7 @@ class A4Measurement(TypedDict):
     fill: float
     method: str
     sides: list[float]   # 四边形算子的 4 条边长（px），Otsu 兜底时为空
+    center: list[float]  # 纸心 xy —— ppm 只在这个位置严格成立
 
 
 def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A4_SHORT_MM,
@@ -74,13 +77,14 @@ def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A
     img 允许彩色或单通道灰度，两者结果必须一致。
     """
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    sides = quad_sides(gray)
-    if sides is not None:
+    quad = quad_sides(gray)
+    if quad is not None:
+        sides, center = quad
         long_px, short_px = quad_pair_means(sides)
         fill, method = 1.0, 'quad'
     else:
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        long_px, short_px, fill = _bright_side_lengths(binary)
+        long_px, short_px, fill, center = _bright_side_lengths(binary)
         sides, method = [], 'otsu'
 
     ppm_long = float(long_px / long_mm)
@@ -99,6 +103,7 @@ def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A
         'fill': float(fill),
         'method': method,
         'sides': sides,
+        'center': [center[0], center[1]],
     }
 
 

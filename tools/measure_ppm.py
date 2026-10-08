@@ -23,8 +23,9 @@ DEFAULT_CONFIG = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'coin_detect', 'config_setting.py'))
 
 
-def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int]) -> list[str]:
-    """把 ppm 和标定图尺寸写进 config_setting.py，返回改动后的行文本。"""
+def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int],
+              center: tuple[float, float]) -> list[str]:
+    """把 ppm、标定图尺寸和纸心写进 config_setting.py，返回改动后的行文本。"""
     with open(config_path, encoding='utf-8') as f:
         text = f.read()
     today = datetime.date.today().isoformat()
@@ -34,6 +35,10 @@ def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int]) -> list[s
         (r'(?m)^calib_image_size\s*=',
          f"calib_image_size = ({img_size[0]}, {img_size[1]})"
          f"  # 标定图宽高，测量图必须与此一致"),
+        (r'(?m)^calib_center\s*=',
+         f"calib_center = ({center[0]:.1f}, {center[1]:.1f})"
+         f"  # 标定时的纸心 xy —— ppm 是四边均值，只在这个位置严格成立；"
+         f"注意它不等于画面中心"),
     ]
     changed: list[str] = []
     for pattern, line in targets:
@@ -77,8 +82,13 @@ def main() -> None:
                 f"差 {abs(m['aspect'] - expect_aspect) / expect_aspect * 100:.2f}%）")
     logger.info(f"ppm = {m['ppm']:.4f}  （即 1 px = {1000 / m['ppm']:.1f} 微米）")
 
+    cx, cy = m['center']
+    logger.info(f"纸心 ({cx:.0f}, {cy:.0f}) | 画面中心 ({w // 2}, {h // 2}) —— "
+                f"两者相差 {abs(cx - w / 2) / m['ppm']:.0f}x{abs(cy - h / 2) / m['ppm']:.0f}mm，"
+                f"待测物要对准的是纸心，不是画面中心")
+
     if args.write:
-        for line in write_ppm(args.config, m['ppm'], (w, h)):
+        for line in write_ppm(args.config, m['ppm'], (w, h), (cx, cy)):
             logger.info("已写入: " + line)
 
 
