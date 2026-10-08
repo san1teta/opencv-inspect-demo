@@ -61,9 +61,10 @@ def main() -> None:
     m = calibration.measure_a4(img, args.long, args.short, 99.0)   # 放宽阈值拿全部数字，判卷在下面自己下
     m_diff = abs(m['ppm_long'] - m['ppm_short']) / m['ppm_long']
     span = m['long_px'] / max(w, h)
+    expect_aspect = args.long / args.short   # 用实测边长算，别用名义 297/210
     checks = [
-        ('FAIL', f"长宽比 {calibration.A4_ASPECT:.4f} ±0.5%",
-         abs(m['aspect'] - calibration.A4_ASPECT) / calibration.A4_ASPECT <= 0.005, f"{m['aspect']:.4f}"),
+        ('FAIL', f"长宽比 {expect_aspect:.4f} ±0.5%",
+         abs(m['aspect'] - expect_aspect) / expect_aspect <= 0.005, f"{m['aspect']:.4f}"),
         ('FAIL', '长短边 ppm 互差 < 1%', m_diff < 0.01, f'{m_diff * 100:.2f}%'),
         ('WARN', '轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
         ('WARN', '亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),

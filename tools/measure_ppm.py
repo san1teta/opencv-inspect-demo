@@ -72,8 +72,9 @@ def main() -> None:
     logger.info(f"标定图尺寸 {w}x{h}px —— 之后所有待测图必须是同一尺寸，否则 ppm 不适用")
     logger.info(f"长边 {m['long_px']:.1f}px → {m['ppm_long']:.4f} ppm | "
                 f"短边 {m['short_px']:.1f}px → {m['ppm_short']:.4f} ppm")
-    logger.info(f"长宽比 {m['aspect']:.4f}（A4 应为 {calibration.A4_ASPECT:.4f}，"
-                f"差 {abs(m['aspect'] - calibration.A4_ASPECT) / calibration.A4_ASPECT * 100:.2f}%）")
+    expect_aspect = args.long / args.short
+    logger.info(f"长宽比 {m['aspect']:.4f}（本纸应为 {expect_aspect:.4f}，"
+                f"差 {abs(m['aspect'] - expect_aspect) / expect_aspect * 100:.2f}%）")
     logger.info(f"ppm = {m['ppm']:.4f}  （即 1 px = {1000 / m['ppm']:.1f} 微米）")
 
     if args.write:
