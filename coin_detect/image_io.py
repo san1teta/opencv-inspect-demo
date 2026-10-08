@@ -12,9 +12,13 @@ import numpy as np
 
 def read_image(path: str) -> np.ndarray:
     """读图，支持非 ASCII 路径。读不到抛 FileNotFoundError，绝不返回 None 让调用方漏判。"""
-    img = cv2.imread(path)
-    if img is None:
-        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if path.isascii():
+        img = cv2.imread(path)
+        if img is not None:
+            return img
+    # 非 ASCII 路径直接走 imdecode：先试 imread 必然失败，还会往 stderr 喷一条
+    # 「can't open/read file」的 WARN —— 手机传来的中文文件名一堆时，噪声能把真报错埋掉。
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise FileNotFoundError(f"读不到图片: {path}")
     return img
