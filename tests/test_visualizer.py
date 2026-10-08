@@ -12,10 +12,11 @@ import visualizer
 BOX = np.array([[[10, 10]], [[50, 10]], [[50, 60]], [[10, 60]]], np.int32)
 
 
-def _feat(severity, direction, circularity='合格'):
-    return {'contour': BOX, 'diameter_mm': 25.08,
+def _feat(severity, direction, circularity='合格', deficit_mm=0.1):
+    return {'contour': BOX, 'diameter_mm': 25.08, 'deficit_point': (60.0, 35.0),
             'result': {'circularity': circularity, 'severity': severity,
-                       'direction': direction, 'deviation': 0.08}}
+                       'direction': direction, 'deviation': 0.08,
+                       'deficit_mm': deficit_mm, 'basis': '无'}}
 
 
 class TestVisualizer(unittest.TestCase):

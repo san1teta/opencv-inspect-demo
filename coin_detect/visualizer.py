@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 from typing import Any
+import config_setting
+
 color_map = {
     '合格': (0, 255, 0),
     '轻度': (0, 255, 255),
@@ -29,13 +31,20 @@ def draw_result(img: np.ndarray, all_features: list[dict[str, Any]]) -> np.ndarr
     for i in all_features:
         cnt = i['contour']
         x, y, w_rect, h_rect = cv2.boundingRect(cnt)
-        if i['result']['circularity'] == '不合格':
+        res = i['result']
+        if res['circularity'] == '不合格':
             color = (0, 0, 255)
             label = SHAPE_NG
         else:
-            color = color_map[i['result']['severity']]
-            label = f"{i['diameter_mm']:.2f}mm {CODE[i['result']['severity']]}"
-            label += DIRECTION.get(i['result']['direction'], '')
+            color = color_map[res['severity']]
+            label = f"{i['diameter_mm']:.2f}mm {CODE[res['severity']]}"
+            label += DIRECTION.get(res['direction'], '')
+            # 刀口单独标点位置：总评可能由尺寸档驱动，但缺损点仍要一眼看得到
+            if res['deficit_mm'] is not None and res['deficit_mm'] > config_setting.defect_light:
+                label += f" N{res['deficit_mm']:.2f}"
+                dx, dy = i['deficit_point']
+                cv2.circle(output_img, (int(dx), int(dy)), max(4, int(6 * scale)),
+                           (0, 0, 255), thick)
 
         cv2.rectangle(output_img, (x, y), (x+w_rect, y+h_rect), color, thick)
         cv2.putText(output_img, label, (x, max(int(2.5 * scale * 12), y - 10 * thick)),

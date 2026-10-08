@@ -5,11 +5,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# CSV 和 Excel 共用一份表头，免得两处各写一遍然后改漏一边
+HEADER = ["序号", "图片名称", "面额", "直径(mm)", "圆度", "偏差(mm)", "缺损(mm)", "方向", "严重程度", "判定依据"]
+
 def _export_data(all_results:list[dict[str, Any]], coin_name: str) -> list[list[Any]]:
     rows = []
     for frame in all_results:
         if not frame['detections']:
-            rows.append([frame['index'], frame['image_name'], coin_name, None, None, None, None, '未检出'])
+            rows.append([frame['index'], frame['image_name'], coin_name] + [None] * 6 + ['未检出'])
             continue
         for det in frame['detections']:
             rows.append([
@@ -19,8 +22,10 @@ def _export_data(all_results:list[dict[str, Any]], coin_name: str) -> list[list[
                 round(det['diameter_mm'], 3),
                 det['result']['circularity'],
                 det['result']['deviation'],
+                det['result']['deficit_mm'],
                 det['result']['direction'],
-                det['result']['severity']
+                det['result']['severity'],
+                det['result']['basis']
             ])
     return rows
 
@@ -32,7 +37,7 @@ def export_to_csv(all_results:list[dict[str,Any]], filepath:str, coin_name:str) 
     rows = _export_data(all_results, coin_name)
     with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
-        writer.writerow(["序号", "图片名称", "面额", "直径(mm)", "圆度", "偏差(mm)", "方向", "严重程度"])
+        writer.writerow(HEADER)
         writer.writerows(rows)
         logger.info(f"检测报告已成功导出到{filepath}")
 
@@ -43,7 +48,7 @@ def export_to_excel(all_results:list[dict[str,Any]], filepath:str, coin_name:str
     wb = Workbook()
     ws = wb.active
     assert ws is not None
-    ws.append(["序号", "图片名称", "面额", "直径(mm)", "圆度", "偏差(mm)", "方向", "严重程度"])
+    ws.append(HEADER)
     for row in _export_data(all_results, coin_name):
         ws.append(row)
     wb.save(filepath)

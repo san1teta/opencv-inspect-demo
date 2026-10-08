@@ -21,17 +21,20 @@ if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(errors='replace')   # GBK 控制台别被一个字符带走整份报告
 
 
-def make_coin(diameter_mm: float, ppm: float, w: int, h: int) -> tuple[np.ndarray, float]:
+def make_coin(diameter_mm: float, ppm: float, w: int, h: int,
+              nick_mm: float = 0.0) -> tuple[np.ndarray, float]:
     """深色背景上画一枚边缘干净的圆币，尺寸按标定 ppm 换算。
 
     半径只能取整，所以真值是「画出来的」那个直径 —— 拿名义值当基准，
     会把最多 ±0.05mm 的画图量化算到测量链头上。
+    nick_mm 是缺口深度：咬痕圆的圆心压在轮廓上，半径 = 深度，所以啃进去正好 nick_mm。
     """
     img = np.full((h, w, 3), 40, np.uint8)
     r = int(round(diameter_mm * ppm / 2))
     cv2.circle(img, (w // 2, h // 2), r, (200, 200, 200), -1)
+    if nick_mm > 0:
+        cv2.circle(img, (w // 2 + r, h // 2), int(round(nick_mm * ppm)), (40, 40, 40), -1)
     return img, 2 * r / ppm
-
 
 
 def main() -> None:
@@ -51,14 +54,18 @@ def main() -> None:
         sys.exit("calib_image_size 未标定，先跑 tools/measure_ppm.py --write")
     ppm = config_setting.ppm
     print(f"标定 ppm {ppm:.4f} -> 1px = {1000 / ppm:.1f} 微米 | {args.coin} 标准 {std}mm 允差 ±{tol}mm")
-    print(f"分级刀口：|偏差|<= {tol:.2f} 合格，<= {tol + config_setting.grade_light:.2f} 轻度，"
-          f"<= {tol + config_setting.grade_mid:.2f} 中度，否则重度\n")
+    print(f"尺寸档：|偏差|<= {tol:.2f} 合格，<= {tol + config_setting.grade_light:.2f} 轻度，"
+          f"<= {tol + config_setting.grade_mid:.2f} 中度，否则重度")
+    print(f"缺损档：径向凹陷 <= {config_setting.defect_light} 合格，<= {config_setting.defect_mid} 轻度，"
+          f"<= {config_setting.defect_heavy} 中度，否则重度\n")
 
-    worst = 0.0
     grades = set()
+
+    print('== 1) 直径真值扫描（尺寸路）==')
+    worst = 0.0
     for d in diams:
         img, drawn = make_coin(d, ppm, w, h)
-        _, dets = pipeline.process_single_frame(img, args.coin)
+        dets = pipeline.process_single_frame(img, args.coin)[1]
         if len(dets) != 1:
             print(f"真值 {drawn:6.3f}mm -> 检出 {len(dets)} 个轮廓，应为 1 个  [FAIL]")
             continue
@@ -69,14 +76,28 @@ def main() -> None:
         grades.add(res['severity'])
         flag = 'PASS' if abs(err) < 0.05 else 'FAIL'
         print(f"名义 {d:5.2f} 真值 {drawn:6.3f} -> 测得 {got:6.3f}mm  误差 {err:+.3f}mm [{flag}]  "
-              f"圆度 {res['circularity']}  分级 {res['severity']} {res['direction']}")
+              f"分级 {res['severity']} 依据 {res['basis']}")
+    print(f"   测量链最大误差 {worst:.3f}mm（阈值 0.05mm）\n")
 
-    print(f"\n测量链最大误差 {worst:.3f}mm（不含相机与拍摄因素；阈值 0.05mm）")
+    print('== 2) 缺口深度扫描（缺损路）==')
+    print('   这一节证明为什么不能只看直径：缺口是局部事件，面积等效直径是全局量，抓不住')
+    base = pipeline.process_single_frame(make_coin(std, ppm, w, h)[0], args.coin)[1][0]
+    for nick in (0.0, 0.5, 1.0, 2.0, 3.0):
+        img, _ = make_coin(std, ppm, w, h, nick_mm=nick)
+        det = pipeline.process_single_frame(img, args.coin)[1][0]
+        res = det['result']
+        grades.add(res['severity'])
+        dd = det['diameter_mm'] - base['diameter_mm']
+        flag = 'PASS' if abs(res['deficit_mm'] - nick) < 0.15 else 'FAIL'
+        print(f"缺口 {nick:4.1f}mm -> 测得凹陷 {res['deficit_mm']:5.3f}mm [{flag}]  "
+              f"直径只变 {dd:+.3f}mm  分级 {res['severity']} 依据 {res['basis']}")
+
     missing = {'合格', '轻度', '中度', '重度'} - grades
-    if missing:
-        print(f"未触发的分级：{'、'.join(sorted(missing))}")
-    else:
-        print("四档分级全部触发")
+    print()
+    print("四档分级全部触发" if not missing else f"未触发的分级：{'、'.join(sorted(missing))}")
+    if worst >= 0.05 or missing:
+        sys.exit(1)
+
 
 
 if __name__ == "__main__":

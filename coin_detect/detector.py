@@ -28,9 +28,22 @@ def calculate_features(contour:np.ndarray) -> dict[str, Any]:
     envelope = np.pi * radius ** 2
     circularity = (area / envelope) if envelope > 0 else 0
 
+    # 3) 径向最大凹陷：刀口 / 缺口的直接量。
+    #    直径法对缺口几乎无感 —— 实测 1mm 深的缺口只让等效直径变小 0.035mm（面积是全局量，
+    #    局部少一小块摊到整个圆上就没了），而缺口是局部事件，就必须用局部量去抓。
+    #    参考半径取「中位半径」而不是外接圆半径：整体磨小是中位半径一起缩，凹陷仍是 0，
+    #    于是「尺寸超差」和「边缘缺损」两件事被干净分开，各走各的判据。
+    pts = contour.reshape(-1, 2).astype(np.float32)
+    dist = np.linalg.norm(pts - np.array([cx, cy], np.float32), axis=1)
+    base = float(np.median(dist))
+    worst = int(np.argmin(dist))
+    deficit_pixels = max(0.0, base - float(dist[worst]))
+
     return{'area':area,
            'perimeter':perimeter,
            'circularity':float(circularity),
            'diameter_pixels':diameter_pixels,
+           'deficit_pixels':deficit_pixels,
+           'deficit_point':(float(pts[worst][0]), float(pts[worst][1])),
            'center':(int(cx),int(cy))
            }

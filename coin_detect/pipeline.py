@@ -25,10 +25,13 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
     for cnt in contours:
         features = detector.calculate_features(cnt)
         diameter_mm = calibration.pixels_to_mm(features['diameter_pixels'], config_setting.ppm)
-        result = defect_analyzer.judge_quality(diameter_mm, features['circularity'], coin_name)
+        deficit_mm = calibration.pixels_to_mm(features['deficit_pixels'], config_setting.ppm)
+        result = defect_analyzer.judge_quality(diameter_mm, deficit_mm,
+                                               features['circularity'], coin_name)
         all_features.append({
             'contour': cnt,
             'diameter_mm': diameter_mm,
+            'deficit_point': features['deficit_point'],
             'result': result
         })
         logger.debug(f"{coin_name}的结果是{result}")
