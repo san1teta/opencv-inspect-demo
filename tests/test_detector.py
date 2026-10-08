@@ -38,6 +38,28 @@ def _measure(diameter_mm: float, nick_mm: float = 0.0) -> tuple[dict, float]:
     return detector.calculate_features(cnt), 2 * r / PPM
 
 
+def _bucket(depth_mm: float) -> str:
+    """缺损分级档位 —— 真正要守住的不是小数点，是落在哪一档。"""
+    for name, lim in (('重度', config_setting.defect_heavy),
+                      ('中度', config_setting.defect_mid),
+                      ('轻度', config_setting.defect_light)):
+        if depth_mm >= lim:
+            return name
+    return '合格'
+
+
+def _spiked(diameter_mm: float, spike_px: int) -> tuple[dict, float]:
+    """画一枚边缘带毛刺（向外凸起、不吞材料）的币，走同一条真实预处理链。"""
+    img = np.full((700, 700), 40, np.uint8)
+    r = int(round(diameter_mm * PPM / 2))
+    cv2.circle(img, (350, 350), r, 200, -1)
+    cv2.line(img, (350 + r - 4, 350), (350 + r + spike_px, 350), 200, 3)
+    edges = preprocess.canny(preprocess.gaussian_blur(img, config_setting.gaussian_kernel),
+                             config_setting.canny_low, config_setting.canny_high)
+    cnt = max(detector.find_contours(edges, config_setting.min_area), key=cv2.contourArea)
+    return detector.calculate_features(cnt), 2 * r / PPM
+
+
 class TestCalculateFeatures(unittest.TestCase):
     def test_diameter_has_no_systematic_bias(self):
         """曾经用外接圆直径，19/20.5/25mm 一律 +1.21px（+0.12mm），吃光整个精度预算。"""
@@ -59,11 +81,37 @@ class TestCalculateFeatures(unittest.TestCase):
                 self.assertLess(f['deficit_pixels'] / PPM, 0.15)
 
     def test_deficit_measures_notch_depth(self):
-        """径向凹陷要定量：报出来的数就该等于实际啃掉的深度。"""
-        for depth in (0.5, 1.0, 2.0):
+        """径向凹陷要定量：报出来的数就该落在缺口真值附近，而且必须落进同一档。
+
+        容差按相对误差 15% 给，不按绝对 0.15mm —— 质心会被啃掉的材料推向缺口反向，
+        缺口越深低估越多（3mm 真值报 2.59mm）。分档才是这套判据真正要守住的东西。
+        """
+        for depth in (0.5, 1.0, 2.0, 3.0):
             with self.subTest(depth=depth):
                 f, _ = _measure(25.0, nick_mm=depth)
-                self.assertAlmostEqual(f['deficit_pixels'] / PPM, depth, delta=0.15)
+                got = f['deficit_pixels'] / PPM
+                self.assertLessEqual(abs(got - depth) / depth, 0.15)
+                self.assertEqual(_bucket(got), _bucket(depth))
+
+    def test_outward_burr_does_not_invent_a_notch(self):
+        """回归锁：边缘一处向外毛刺不得凭空造出缺口。
+
+        这是真币上踩到的坑 —— 完好 1元 量出 deficit 0.690mm，越过 defect_light=0.4，
+        每一枚良品都会被误判成有缺口。根因是 deficit 曾绕着 minEnclosingCircle 的圆心算，
+        而外接圆只由 2~3 个极端点决定，一处毛刺就把圆心拖走 5px。改用质心后同一枚币
+        降到 0.148mm。合成完美圆测不出这条，因为完美圆的外接圆圆心恰好就是真圆心。
+        """
+        for spike in (0, 8, 16):
+            with self.subTest(spike_px=spike):
+                f, _ = _spiked(25.0, spike)
+                self.assertLess(f['deficit_pixels'] / PPM, config_setting.defect_light)
+
+    def test_center_is_the_centroid_not_the_envelope(self):
+        """'center' 要落在币的几何中心：放位检查和缺陷径向都靠它，不能被极端点带偏。"""
+        f, _ = _spiked(25.0, 16)
+        self.assertLess(abs(f['center'][0] - 350), 3)
+        self.assertLess(abs(f['center'][1] - 350), 3)
+
 
     def test_notch_is_invisible_to_size_but_not_to_edge(self):
         """换判据的全部理由：2mm 深的缺口只让等效直径小 0.15mm —— 比允差 0.25mm 还小，
