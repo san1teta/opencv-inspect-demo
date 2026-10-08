@@ -30,6 +30,7 @@ import defect_analyzer  # noqa: E402
 import detector  # noqa: E402
 import image_io  # noqa: E402
 import preprocess  # noqa: E402
+from batch_loader import is_sample  # noqa: E402  工具产物不算样本，理由见 batch_loader
 
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(errors='replace')   # GBK 控制台别被一个字符带走整份报告
@@ -63,7 +64,8 @@ def _part_id(stem: str) -> str:
 
 
 def _stats(folder: str, coin: str) -> dict | None:
-    names = sorted(f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.jpeg', '.png')))
+    names = sorted(f for f in os.listdir(folder)
+                   if f.lower().endswith(('.jpg', '.jpeg', '.png')) and is_sample(f))
     ds, defs, ms, grades, parts = [], [], [], {}, {}
     for name in names:
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)

@@ -53,6 +53,29 @@ class TestLoadImagesFromFolder(unittest.TestCase):
             items = batch_loader.load_images_from_folder(d)
             self.assertEqual(items, [])
 
+class Test工具产物不算样本(unittest.TestCase):
+    """标注图混进样本集不会报错，只会安静地给出错的均值 —— 所以必须在这里堵住。"""
+
+    def test_is_sample_排除下划线与place与result前缀(self):
+        for name in ('_thumb.jpg', 'place_test.jpg', 'result_a01.jpg'):
+            with self.subTest(name=name):
+                self.assertFalse(batch_loader.is_sample(name))
+
+    def test_is_sample_保留拍摄清单里的全部命名(self):
+        """误过滤会让样本悄悄变少，比误加更难发现。"""
+        for name in ('a01.jpg', 'r01.jpg', 'n01.jpg', 'coin01.png', 'coin02.BMP'):
+            with self.subTest(name=name):
+                self.assertTrue(batch_loader.is_sample(name))
+
+    def test_同目录的place标注图不进待检列表(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_temp_image(d, 'a01.jpg')
+            write_temp_image(d, 'place_a01.jpg')
+            write_temp_image(d, '_thumb.jpg')
+            items = batch_loader.load_images_from_folder(d)
+            self.assertEqual([x['name'] for x in items], ['a01.jpg'])
+
+
 if __name__ == '__main__':
     unittest.main()
 
