@@ -3,6 +3,7 @@
 标定不合格时先看这张图，别猜。
 """
 import argparse
+import io
 import os
 import re
 import sys
@@ -14,6 +15,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 
 import calibration  # noqa: E402
 import image_io  # noqa: E402
+
+# 中文 Windows 控制台默认 GBK，指标里混进一个编不出的字符（µ、↔ 这类）就会抛 UnicodeEncodeError
+# 把整份诊断带走。宁可打成 ? 也要把结论吐完。
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(errors='replace')
 
 
 def main() -> None:
@@ -70,6 +76,10 @@ def main() -> None:
     m = calibration.measure_a4(img, args.long, args.short, 99.0)   # 放宽阈值拿全部数字，判卷在下面自己下
     m_diff = abs(m['ppm_long'] - m['ppm_short']) / m['ppm_long']
     span = m['long_px'] / max(w, h)
+    grad = 0.0
+    if len(m['sides']) == 4:   # 只有四边形算子给得出逐边长度，Otsu 兜底时退化为外接矩形（梯度恒 0）
+        s = m['sides']
+        grad = max(abs(s[0] - s[2]) / ((s[0] + s[2]) / 2), abs(s[1] - s[3]) / ((s[1] + s[3]) / 2))
     checks = [
         ('FAIL', f"长宽比 {expect_aspect:.4f} ±0.5%",
          abs(m['aspect'] - expect_aspect) / expect_aspect <= 0.005, f"{m['aspect']:.4f}"),
@@ -79,9 +89,16 @@ def main() -> None:
         ('WARN', '纸占画面长边 < 95%（太满易裁角）', span < 0.95, f'{span * 100:.1f}%'),
         ('WARN', '纸面平均灰度 150~240', 150 <= mean_in <= 240, f'{mean_in:.0f}'),
         ('WARN', '纸面饱和=255 占比 < 5%', clipped < 5.0, f'{clipped:.1f}%'),
+        ('WARN', '比例尺梯度（对边差）< 0.5%', grad < 0.005, f'{grad * 100:.2f}%'),
     ]
     print(f"标定算子：{m['method']} | ppm_long {m['ppm_long']:.4f} | ppm_short {m['ppm_short']:.4f}"
           f" | 采用 ppm {m['ppm']:.4f}")
+    if grad:
+        # grad 是对边峰峰值，纸心↔纸边只吃一半；别把峰峰值当成中心偏差报，会虚高一倍
+        half = grad * 25 / 2
+        print(f"比例尺梯度 {grad * 100:.2f}%（对边峰峰值）：ppm 取四边均值，只在纸心严格成立。"
+              f"按 25mm 直径：纸心到纸边 ±{half:.3f}mm，纸两端之间 {grad * 25:.3f}mm")
+        print(f"  → 待测物放纸心 ±{0.05 * args.short / (grad * 25):.0f}mm 内，该项即可压到 0.05mm 以下")
     print('判卷（WARN 只是提醒，不影响结论；杂亮高但长宽比/互差都过 = 杂物没粘连，可用）：')
     for level, name, ok, value in checks:
         print(f"  {'PASS' if ok else level:<4} {name:<34} 实测 {value}")

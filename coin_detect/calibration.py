@@ -13,10 +13,12 @@ def pixels_to_mm(pixels: float, ppm: float) -> float:
     return pixels / ppm
 
 
-def _quad_side_lengths(gray: np.ndarray) -> tuple[float, float] | None:
+def quad_sides(gray: np.ndarray) -> list[float] | None:
     """边缘 + 四边形拟合找纸：主动忽略杂物（凳腿/木纹/锁边线都不是大四边形）。
 
-    返回 (长边px, 短边px)，找不到可信四边形时返回 None。对边取平均以削弱透视影响。
+    返回按顶点顺序的 4 条边长（px），找不到可信四边形时返回 None。
+    边长原样吐出来而不是只吐长短边，是因为「对边是否相等」本身就是透视指标
+    （见 quad_pair_means / diag_a4 的比例尺梯度）。
     """
     h, w = gray.shape
     edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 50, 150)
@@ -28,11 +30,16 @@ def _quad_side_lengths(gray: np.ndarray) -> tuple[float, float] | None:
             continue
         p = approx.reshape(4, 2).astype(np.float32)
         sides = [float(np.linalg.norm(p[i] - p[(i + 1) % 4])) for i in range(4)]
-        a, b = (sides[0] + sides[2]) / 2, (sides[1] + sides[3]) / 2
-        if min(a, b) < 20:
+        if min(quad_pair_means(sides)) < 20:
             continue
-        return max(a, b), min(a, b)
+        return sides
     return None
+
+
+def quad_pair_means(sides: list[float]) -> tuple[float, float]:
+    """对边取平均折成长短边，以削弱透视影响。返回 (长边px, 短边px)。"""
+    a, b = (sides[0] + sides[2]) / 2, (sides[1] + sides[3]) / 2
+    return max(a, b), min(a, b)
 
 
 def _bright_side_lengths(binary: np.ndarray) -> tuple[float, float, float]:
@@ -56,6 +63,7 @@ class A4Measurement(TypedDict):
     short_px: float
     fill: float
     method: str
+    sides: list[float]   # 四边形算子的 4 条边长（px），Otsu 兜底时为空
 
 
 def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A4_SHORT_MM,
@@ -63,15 +71,17 @@ def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A
     """量出画面里那张 A4 纸，返回两套 ppm、长宽比和所用算子；长短边互差超 tol 直接 raise。
 
     先走四边形拟合（能主动忽略杂物），失败再退回 Otsu 最大亮区。
+    img 允许彩色或单通道灰度，两者结果必须一致。
     """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    quad = _quad_side_lengths(gray)
-    if quad is not None:
-        long_px, short_px, fill, method = quad[0], quad[1], 1.0, 'quad'
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    sides = quad_sides(gray)
+    if sides is not None:
+        long_px, short_px = quad_pair_means(sides)
+        fill, method = 1.0, 'quad'
     else:
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         long_px, short_px, fill = _bright_side_lengths(binary)
-        method = 'otsu'
+        sides, method = [], 'otsu'
 
     ppm_long = float(long_px / long_mm)
     ppm_short = float(short_px / short_mm)
@@ -88,6 +98,7 @@ def measure_a4(img: np.ndarray, long_mm: float = A4_LONG_MM, short_mm: float = A
         'short_px': float(short_px),
         'fill': float(fill),
         'method': method,
+        'sides': sides,
     }
 
 

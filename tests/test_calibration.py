@@ -21,6 +21,13 @@ def synthetic_a4(ppm: float = 4.0, angle: float = 17.0, coin: bool = True) -> np
     return img
 
 
+def _flat_paper(pts: list[list[int]]) -> np.ndarray:
+    """深色桌面上画一块纸（顶点顺序任意，只要是个凸四边形）。"""
+    img = np.full((1400, 1000, 3), 40, np.uint8)
+    cv2.fillPoly(img, [np.array(pts, np.int32)], (255, 255, 255))
+    return img
+
+
 class TestPixelsToMm(unittest.TestCase):
     def test_pixels_to_mm(self):
         self.assertEqual(pixels_to_mm(100, 10.0), 10.0)
@@ -60,6 +67,31 @@ class TestMeasureA4(unittest.TestCase):
         img = np.full((600, 600, 3), 255, np.uint8)
         with self.assertRaises(ValueError):
             measure_a4(img)
+
+    def test_gray_input_matches_color(self):
+        """文档承诺「彩色或灰度均可」，就得真的都行（曾经无条件 cvtColor 直接崩）。"""
+        color = synthetic_a4()
+        gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+        self.assertAlmostEqual(measure_a4(gray)['ppm'], measure_a4(color)['ppm'], places=6)
+
+    def test_sides_expose_perspective(self):
+        """四边形算子要吐出逐边长度：正放矩形对边等长，梯形纸（透视）对边明显不等。"""
+        rect = measure_a4(_flat_paper([[100, 150], [900, 150], [900, 716], [100, 716]]))
+        self.assertEqual(rect['method'], 'quad')
+        self.assertEqual(len(rect['sides']), 4)
+        s = rect['sides']
+        self.assertLess(abs(s[0] - s[2]) / s[2], 0.01)
+        self.assertLess(abs(s[1] - s[3]) / s[3], 0.01)
+
+        trap = measure_a4(_flat_paper([[100, 100], [900, 100], [760, 1300], [240, 1300]]), tol=99.0)
+        t = trap['sides']
+        self.assertGreater(abs(t[1] - t[3]) / t[3], 0.05)
+
+    def test_rotated_paper_falls_back_to_otsu(self):
+        """旋转纸光栅化后 approxPolyDP 常得到 8 顶点，四边形算子会放弃 —— 必须退回 Otsu 而不是报错。"""
+        detail = measure_a4(synthetic_a4())
+        self.assertEqual(detail['method'], 'otsu')
+        self.assertEqual(detail['sides'], [])
 
 
 class TestVerifyPpm(unittest.TestCase):
