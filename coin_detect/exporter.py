@@ -16,7 +16,7 @@ def _export_data(all_results:list[dict[str, Any]], coin_name: str) -> list[list[
                 frame['index'],
                 frame['image_name'],
                 coin_name,
-                det['diameter_mm'],
+                round(det['diameter_mm'], 3),
                 det['result']['circularity'],
                 det['result']['deviation'],
                 det['result']['direction'],

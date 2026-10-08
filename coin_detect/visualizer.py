@@ -8,21 +8,36 @@ color_map = {
     '重度': (0, 0, 255)
 }
 
+# cv2.putText 只认 ASCII。喂中文它不报错，只画出「mmmnn」这种垃圾字形（实测就是这样，
+# 整个 demo 的可视化输出等于没有）。所以图上用 ASCII 代号，中文分级仍然留在 CSV / Excel。
+CODE = {
+    '合格': 'OK',
+    '轻度': 'L1',
+    '中度': 'L2',
+    '重度': 'L3',
+}
+DIRECTION = {'偏大': '+HI', '偏小': '-LO'}
+SHAPE_NG = 'SHAPE-NG'
+
+
 def draw_result(img: np.ndarray, all_features: list[dict[str, Any]]) -> np.ndarray:
     output_img = img.copy()
+    w = output_img.shape[1]
+    # 字号必须跟着画面走：写死 0.5 在 3072px 的原图上小到一个像素团，等于没标
+    scale = max(0.5, w / 1200)
+    thick = max(1, int(round(scale * 2)))
     for i in all_features:
         cnt = i['contour']
-        x, y, w, h = cv2.boundingRect(cnt)
+        x, y, w_rect, h_rect = cv2.boundingRect(cnt)
         if i['result']['circularity'] == '不合格':
             color = (0, 0, 255)
-            label = '圆度不合格'
+            label = SHAPE_NG
         else:
             color = color_map[i['result']['severity']]
-            if i['result']['severity'] == '合格':
-                label = '合格'
-            else:
-                label = f"{i['result']['direction']}-{i['result']['severity']}"
+            label = f"{i['diameter_mm']:.2f}mm {CODE[i['result']['severity']]}"
+            label += DIRECTION.get(i['result']['direction'], '')
 
-        cv2.rectangle(output_img, (x, y), (x+w, y+h), color, 2)
-        cv2.putText(output_img, label, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        cv2.rectangle(output_img, (x, y), (x+w_rect, y+h_rect), color, thick)
+        cv2.putText(output_img, label, (x, max(int(2.5 * scale * 12), y - 10 * thick)),
+                    cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick)
     return output_img
