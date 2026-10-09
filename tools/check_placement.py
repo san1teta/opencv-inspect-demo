@@ -8,10 +8,14 @@ ppm 是标定图四条边的均值，只在纸心那一点严格成立，偏离�
 偏移 9.1mm 于是报「位置合格」—— 可 ppm 已经掉了 10%，位置再准也测不出东西。
 比例尺和清晰度这两关就是为堵这个洞加的。
 
+还有第四关「照片新鲜度」，它堵的是另一类错：闸门只能保证「图与 config 自洽」，
+不能保证「config 对应当时的装置」。一张旧图配一次错的新标定，三关照样全绿。
+
 用法：python tools/check_placement.py <一张放着硬币的试拍图> [--coin 1元]
-退出码 0=三项全过，1=有不合格项（可直接挂进批处理/CI）
+退出码 0=全部通过，1=有不合格项（可直接挂进批处理/CI）
 """
 import argparse
+import datetime
 import io
 import math
 import os
@@ -125,6 +129,32 @@ def verdict(dist_mm: float, dev_mm: float | None, blur_mm: float,
     return ('OK' if not bad else 'NG'), bad
 
 
+def stale_note(path: str, calib_stamp: str) -> str:
+    """照片早于标定时刻 => 它是旧装置拍的，不能拿来验收当前 ppm。没问题返回空串。
+
+    为什么非拦不可：昨天那张 test.jpg 实际比例尺 8.844，今天重标定是 8.6620，
+    差 2.1% —— 25mm 上是 0.53mm、两倍于允差，可 `SCALE_GUARD_MM=2.0` 那道闸门
+    根本看不见它，三关全绿通过。**用错一张过期照片，工具会点头。**
+
+    为什么用文件修改时间而不是 EXIF：Pillow 不在 requirements.txt 里，
+    不想为一个检查加未声明依赖（同 visualizer 不引 Pillow 的取舍）。
+    而经数据线/微信「原图」进来的文件，mtime 要么保留拍摄时间（判得准）、
+    要么被改成传输时间（更晚，判不出但不会误判）。**只会漏判、不会冤枉新图**，这个方向可接受。
+    """
+    if not calib_stamp:
+        return ''
+    try:
+        calib = datetime.datetime.fromisoformat(calib_stamp)
+        shot = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+    except (ValueError, OSError):
+        return ''
+    if shot < calib:
+        return (f'照片比标定旧 {int((calib - shot).total_seconds() // 60)} 分钟'
+                f'（拍摄 {shot:%m-%d %H:%M} < 标定 {calib:%m-%d %H:%M}）'
+                f'—— 是重标定之前的装置拍的，不能用来验收当前 ppm，重拍')
+    return ''
+
+
 
 def nudge(tx: float, ty: float, cx: float, cy: float, ppm: float,
           min_mm: float = 2.0) -> tuple[float, float, list[tuple[str, float]]]:
@@ -158,6 +188,9 @@ def main() -> None:
     h, w = img.shape[:2]
     if (w, h) != tuple(config_setting.calib_image_size):
         print(f"警告：本图 {w}x{h} 与标定图 {tuple(config_setting.calib_image_size)} 不一致，ppm 不适用")
+    stale = stale_note(args.image, getattr(config_setting, 'calib_stamp', ''))
+    if stale:
+        print(f"[NG] {stale}")
 
     gray = preprocess.gray(img)
     edges = preprocess.canny(preprocess.gaussian_blur(gray, config_setting.gaussian_kernel),
@@ -210,7 +243,9 @@ def main() -> None:
     print(f"标注图（红十字=标定纸心，绿圆=通过，红圆=不合格）: {out}")
     if failed:
         print(f"{failed} 个目标未通过 —— 先修「比例尺」再修「清晰度」，最后才管位置，顺序反了就白拍")
-    sys.exit(1 if failed else 0)
+    if stale:
+        print('照片早于标定，这一张不作数 —— 重拍后再跑（旧图三关全绿也不能信，见 stale_note）')
+    sys.exit(1 if (failed or stale) else 0)
 
 
 if __name__ == "__main__":

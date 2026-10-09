@@ -3,13 +3,16 @@
 nudge 管「往哪挪」，verdict 管「这一张能不能用」—— 后者是补上的：旧版只判位置，
 放过了 ppm 已失效、量成 22.17mm 的 1元。
 """
+import datetime
+import tempfile
 import unittest
 import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tools')))
 
-from check_placement import guess_coin, nudge, verdict, SCALE_GUARD_MM, BLUR_GUARD_MM  # noqa: E402
+from check_placement import (guess_coin, nudge, stale_note, verdict,  # noqa: E402
+                             SCALE_GUARD_MM, BLUR_GUARD_MM)
 
 PPM = 9.9749
 T = (1000.0, 1000.0)   # 纸心
@@ -89,6 +92,44 @@ class TestVerdict(unittest.TestCase):
         """三关全挂时的排序即修复顺序：比例尺 > 清晰度 > 位置。"""
         _, bad = verdict(999.0, -5.0, 9.9)
         self.assertEqual([b[:3] for b in bad], ['比例尺', '清晰度', '位置：'])
+
+
+class TestStalePhoto(unittest.TestCase):
+    """照片比标定旧就必须拦。test.jpg 曾以「三关全绿」通过验收，而它差 2.1% 比例尺。"""
+
+    CALIB = '2026-10-09 18:05:27'
+
+    def _touch(self, folder: str, name: str, when: str) -> str:
+        p = os.path.join(folder, name)
+        with open(p, 'w') as f:
+            f.write('x')
+        ts = datetime.datetime.fromisoformat(when).timestamp()   # 本地时区，与 fromtimestamp 互逆
+        os.utime(p, (ts, ts))
+        return p
+
+    def test_photo_older_than_calibration_is_flagged(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._touch(d, 'test.jpg', '2026-10-08 19:00:00')
+            self.assertIn('照片比标定旧', stale_note(p, self.CALIB))
+
+    def test_photo_taken_after_calibration_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = self._touch(d, 'a01.jpg', '2026-10-09 18:10:00')
+            self.assertEqual(stale_note(p, self.CALIB), '')
+
+    def test_missing_or_garbage_stamp_skips_check(self):
+        """没标定时刻就跳过，不能因为字段缺失把每张图都判死。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._touch(d, 'a01.jpg', '2026-10-08 19:00:00')
+            self.assertEqual(stale_note(p, ''), '')
+            self.assertEqual(stale_note(p, '昨天下午'), '')
+            self.assertEqual(stale_note(os.path.join(d, '不存在.jpg'), self.CALIB), '')
+
+    def test_same_day_minutes_apart_is_still_caught(self):
+        """必须用完整时刻：标定与拍摄常只差几十分钟，日期粒度拦不住。"""
+        with tempfile.TemporaryDirectory() as d:
+            p = self._touch(d, 'a4_new.jpg', '2026-10-09 17:52:32')
+            self.assertIn('照片比标定旧', stale_note(p, self.CALIB))
 
 
 class TestGuessCoin(unittest.TestCase):

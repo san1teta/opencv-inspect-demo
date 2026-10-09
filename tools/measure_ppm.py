@@ -29,12 +29,18 @@ def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int],
     with open(config_path, encoding='utf-8') as f:
         text = f.read()
     today = datetime.date.today().isoformat()
+    # 用完整时刻而不是日期：同一天里「先拍图、后标定」只隔几十分钟，
+    # 日期粒度拦不住，而恰恰是这种几分钟的错位最容易发生（本次 test.jpg 就是）。
+    now = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
     targets = [
         (r'(?m)^ppm\s*=',
          # 别在这里写死「旧值 X」—— 那是第一次标定时才成立的话，重标定一次就变成假注释。
          # 改成印 1px 的微米数：这才是读 ppm 的人真正想要的量，且永远自洽。
          f"ppm = {ppm:.4f}  # A4 实测于 {today}，1px = {1000 / ppm:.1f} 微米；"
          f"装置动过就必须重标定（标定与拍摄要背靠背，见 HANDOFF）"),
+        (r'(?m)^calib_stamp\s*=',
+         f"calib_stamp = '{now}'  # 标定时刻，由 measure_ppm --write 同步；"
+         f"用于拦「拿旧图当新装置验收」"),
         (r'(?m)^calib_image_size\s*=',
          f"calib_image_size = ({img_size[0]}, {img_size[1]})"
          f"  # 标定图宽高，测量图必须与此一致"),
