@@ -15,15 +15,44 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+def _drop_background(pairs: list[tuple[np.ndarray, dict[str, Any]]], coin_name: str) -> list[tuple[np.ndarray, dict[str, Any]]]:
+    """丢掉尺寸根本不像这个面额的轮廓 —— 它们是背景，不是币。
+
+    2026-10-09 第一张实拍才暴露出这一步缺失：鼠标垫织纹 + 画面下方一个失焦的桶，
+    batch 模式检出 51 个「币」（1.3~4.8mm），每个在 CSV 里占一行，均值/σ/检出率全废。
+    当时 check_placement 对同一张图只报 1 个目标，因为它自带 circularity 过滤 ——
+    闸门只长在工具里、没长在流水线上，而报表走的是流水线。
+
+    circularity 不能拿来当这里的闸门：圆度低是「这枚币变形了」，属于质量结论，
+    必须留在报表里判不合格；拿它当检出条件就会把最该报警的币悄悄吞掉。
+    """
+    spec = config_setting.coin_specs.get(coin_name)
+    if spec is None:
+        return pairs
+    lo, hi = detector.diameter_window(spec['diameter'], config_setting.ppm,
+                                      config_setting.diameter_gate_mm)
+    kept = [(c, f) for c, f in pairs if lo <= f['diameter_pixels'] <= hi]
+    if pairs and not kept:
+        # 全军覆没最可能是标定/距离出了问题，而不是「画面里没有币」，所以把最大候选的
+        # 实际直径写进日志，别只留一句「未检出」让人去猜是哪一类错。
+        big = max((f for _, f in pairs), key=lambda f: f['area'])
+        logger.warning(f"{coin_name}：{len(pairs)} 个轮廓全部落在标称 "
+                       f"{spec['diameter']}±{config_setting.diameter_gate_mm}mm 之外"
+                       f"（最大者等效直径 {big['diameter_pixels'] / config_setting.ppm:.2f}mm、"
+                       f"圆度 {big['circularity']:.3f}）—— 先查相机距离与 ppm，再确认币有没有入画")
+    return kept
+
+
 def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """单帧定义"""
     gray_img = preprocess.gray(frame)
     blur_img = preprocess.gaussian_blur(gray_img, config_setting.gaussian_kernel)
     edge_img = preprocess.canny(blur_img, config_setting.canny_low, config_setting.canny_high)
     contours = detector.find_contours(edge_img, config_setting.min_area)
+    pairs = _drop_background([(cnt, detector.calculate_features(cnt)) for cnt in contours],
+                             coin_name)
     all_features = []
-    for cnt in contours:
-        features = detector.calculate_features(cnt)
+    for cnt, features in pairs:
         diameter_mm = calibration.pixels_to_mm(features['diameter_pixels'], config_setting.ppm)
         deficit_mm = calibration.pixels_to_mm(features['deficit_pixels'], config_setting.ppm)
         result = defect_analyzer.judge_quality(diameter_mm, deficit_mm,
@@ -31,6 +60,10 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
         all_features.append({
             'contour': cnt,
             'diameter_mm': diameter_mm,
+            # 数值圆度单独留一份：judge_quality 把 result['circularity'] 覆成了
+            # 「合格/不合格」，光看报表拿不到分布，而 min_circularity=0.90 这条临时
+            # 门限正是靠真样本的分布来定的。
+            'circularity': features['circularity'],
             'deficit_point': features['deficit_point'],
             'result': result
         })

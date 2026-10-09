@@ -131,5 +131,31 @@ class TestCalculateFeatures(unittest.TestCase):
         self.assertLess(worn['deficit_pixels'], 0.15 * PPM)
 
 
+class TestDiameterWindow(unittest.TestCase):
+    """闸门本身：像素窗口要等于「标称 ± gate」，两边都要算准。
+
+    换算写在 detector 里，所以在这里锁死；写反一个符号（比如把 gate 加到直径上而不是
+    标称两侧）在实拍上表现为「币全被毙掉」，而日志只说未检出，很难往回查。
+    """
+
+    def test_window_is_symmetric_around_nominal(self):
+        lo, hi = detector.diameter_window(22.25, PPM, 2.0)
+        self.assertAlmostEqual(lo / PPM, 20.25, places=6)
+        self.assertAlmostEqual(hi / PPM, 24.25, places=6)
+
+    def test_nominal_coin_falls_inside(self):
+        f, _ = _measure(22.25)
+        lo, hi = detector.diameter_window(22.25, PPM, config_setting.diameter_gate_mm)
+        self.assertTrue(lo <= f['diameter_pixels'] <= hi,
+                        f"标称尺寸的币被自己的闸门毙了：{f['diameter_pixels'] / PPM:.3f}mm")
+
+    def test_reeding_shrinkage_still_clears_the_window(self):
+        """实拍完好 1元 量出 22.07mm（比标称小 0.18mm，疑似齿边把等效直径拉到齿根侧）。
+        闸门必须对这种系统性小偏完全无感，否则正常照片会被当成背景丢掉。"""
+        f, _ = _measure(22.25 - 0.18)
+        lo, hi = detector.diameter_window(22.25, PPM, config_setting.diameter_gate_mm)
+        self.assertTrue(lo <= f['diameter_pixels'] <= hi)
+
+
 if __name__ == '__main__':
     unittest.main()

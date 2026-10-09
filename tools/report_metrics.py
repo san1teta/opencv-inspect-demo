@@ -20,7 +20,6 @@ import statistics
 import sys
 import time
 
-import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'coin_detect')))
@@ -37,20 +36,32 @@ if isinstance(sys.stdout, io.TextIOWrapper):
 
 
 def _one(img: np.ndarray, coin: str) -> tuple[dict | None, float]:
-    """返回（最优检测, 本张耗时 ms）。最优 = 面积最大的轮廓，即硬币本体。"""
+    """返回（最优检测, 本张耗时 ms）。最优 = 过了尺寸闸门之后面积最大的轮廓。
+
+    必须先过闸门再挑最大。原来的写法是「直接取面积最大的轮廓」，两个后果：
+    1) 币没入画时它选中背景团，照样给出一个直径 —— 于是「检出率」恒为 100%，
+       数字好看但全是假的，而这恰恰是要拿去写 README 精度声明的那个数；
+    2) 背景里比币大的东西（本装置画面下方那个失焦的桶）会把币顶掉。
+    耗时口径不变，仍只量到 find_contours 为止，好让新旧 ms/张 可比。
+    """
     t0 = time.perf_counter()
     gray = preprocess.gray(img)
     blur = preprocess.gaussian_blur(gray, config_setting.gaussian_kernel)
     edges = preprocess.canny(blur, config_setting.canny_low, config_setting.canny_high)
     contours = detector.find_contours(edges, config_setting.min_area)
     ms = (time.perf_counter() - t0) * 1000
-    if not contours:
+    feats = [detector.calculate_features(c) for c in contours]
+    spec = config_setting.coin_specs[coin]
+    lo, hi = detector.diameter_window(spec['diameter'], config_setting.ppm,
+                                      config_setting.diameter_gate_mm)
+    feats = [f for f in feats if lo <= f['diameter_pixels'] <= hi]
+    if not feats:
         return None, ms
-    f = detector.calculate_features(max(contours, key=cv2.contourArea))
+    f = max(feats, key=lambda x: x['area'])
     ppm = config_setting.ppm
     d = f['diameter_pixels'] / ppm
     deficit = f['deficit_pixels'] / ppm
-    return ({'d': d, 'deficit': deficit,
+    return ({'d': d, 'deficit': deficit, 'circ': f['circularity'],
              'result': defect_analyzer.judge_quality(d, deficit, f['circularity'], coin)}, ms)
 
 
@@ -66,19 +77,20 @@ def _part_id(stem: str) -> str:
 def _stats(folder: str, coin: str) -> dict | None:
     names = sorted(f for f in os.listdir(folder)
                    if f.lower().endswith(('.jpg', '.jpeg', '.png')) and is_sample(f))
-    ds, defs, ms, grades, parts = [], [], [], {}, {}
+    ds, defs, cs, ms, grades, parts = [], [], [], [], {}, {}
     for name in names:
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)
         ms.append(this_ms)
         if det is not None:
             ds.append(det['d'])
             defs.append(det['deficit'])
+            cs.append(det['circ'])
             parts.setdefault(_part_id(os.path.splitext(name)[0]), []).append(det['d'])
             g = det['result']['severity']
             grades[g] = grades.get(g, 0) + 1
     if not names:
         return None
-    return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs, 'parts': parts,
+    return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs, 'cs': cs, 'parts': parts,
             'ms': ms, 'grades': grades, 'coin': coin}
 
 
@@ -183,6 +195,15 @@ def main() -> None:
         if s['defs']:
             print(f"  {s['coin']}  中位 {statistics.median(s['defs']):.3f}  最大 {max(s['defs']):.3f}mm"
                   f"  ← 最大若已接近门限 {config_setting.defect_light}mm，说明齿边抬高了底噪，门限要重定")
+
+    print('\n== 圆度分布（用来定 min_circularity）==')
+    for s in batches.values():
+        if s['cs']:
+            print(f"  {s['coin']}  最小 {min(s['cs']):.3f}  中位 {statistics.median(s['cs']):.3f}"
+                  f"  当前门限 {config_setting.min_circularity}"
+                  f"  ← 完好币最小值贴着门限就是定高了，会误杀良品；远低于门限则说明门限形同虚设")
+        else:
+            print(f"  {s['coin']}  无检出，拿不到圆度")
 
 
 if __name__ == "__main__":

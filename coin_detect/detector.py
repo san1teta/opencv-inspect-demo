@@ -60,3 +60,15 @@ def calculate_features(contour:np.ndarray) -> dict[str, Any]:
            'deficit_point':(float(pts[worst][0]), float(pts[worst][1])),
            'center':(int(cx),int(cy))
            }
+
+
+def diameter_window(nominal_mm: float, ppm: float, gate_mm: float) -> tuple[float, float]:
+    """该面额硬币的等效直径像素窗口 [lo, hi]，落在窗外的轮廓是背景不是币。
+
+    返回像素而不是毫米，是为了让调用方拿 calculate_features 的 'diameter_pixels'
+    直接比 —— 这个模块此前一直只做像素域几何，不引进 ppm。
+    窗口开在 ±2mm（config_setting.diameter_gate_mm），比允差 0.25mm 宽 8 倍，这是故意的：
+    它的职责只有「这是不是枚币」，「这枚币合不合格」仍归 defect_analyzer 判。两者不能共用
+    一个阈值，否则尺寸超差的币会被当成背景悄悄丢掉，而不是如实判成重度不合格。
+    """
+    return ((nominal_mm - gate_mm) * ppm, (nominal_mm + gate_mm) * ppm)
