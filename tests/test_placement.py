@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tools')))
 
 from check_placement import (guess_coin, nudge, stale_note, verdict,  # noqa: E402
-                             SCALE_GUARD_MM, BLUR_GUARD_MM)
+                             explain_no_coin, SCALE_GUARD_MM, BLUR_GUARD_MM)
 
 PPM = 9.9749
 T = (1000.0, 1000.0)   # 纸心
@@ -140,6 +140,32 @@ class TestGuessCoin(unittest.TestCase):
     def test_defect_folder_yields_no_denomination(self):
         """defect/ 目录里没有面额，此时必须跳过直径闸门而不是拿错面额去比。"""
         self.assertEqual(guess_coin(r'D:\shots\defect\n01.jpg'), '')
+
+
+class TestExplainNoCoin(unittest.TestCase):
+    """检不到币时必须说破原因，光一句「没找到」在现场等于没说。"""
+
+    def test_blank_image_reports_no_contour(self):
+        import numpy as np
+        lines = explain_no_coin(np.zeros((400, 300, 3), dtype=np.uint8))
+        self.assertTrue(any('一个轮廓都没有' in x for x in lines), lines)
+
+    def test_coin_on_paper_names_the_a4_sheet(self):
+        """RETR_EXTERNAL 下币是嵌套轮廓会被整个丢掉，只剩纸 —— 这个坑必须点名。"""
+        import cv2
+        import numpy as np
+        import config_setting
+        img = np.zeros((4096, 3072, 3), dtype=np.uint8)
+        cx, cy = config_setting.calib_center
+        hw = 297 * config_setting.ppm / 2      # A4 长边一半（像素）
+        hh = 210 * config_setting.ppm / 2
+        cv2.rectangle(img, (int(cx - hw), int(cy - hh)),
+                      (int(cx + hw), int(cy + hh)), (230, 230, 230), -1)
+        cv2.circle(img, (int(cx), int(cy)), int(12.5 * config_setting.ppm / 2),
+                   (40, 40, 40), -1)
+        joined = '\n'.join(explain_no_coin(img))
+        self.assertIn('A4', joined, joined)
+        self.assertIn('嵌套', joined, joined)
 
 
 if __name__ == '__main__':

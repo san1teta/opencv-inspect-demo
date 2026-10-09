@@ -155,6 +155,37 @@ def stale_note(path: str, calib_stamp: str) -> str:
     return ''
 
 
+def explain_no_coin(img) -> list[str]:
+    """检不到币时，把画面里最大的轮廓摊开来说话，而不是甩一句「没找到」。
+
+    为什么非做不可：真实原因九成是 **A4 参照纸没撤**。detector.find_contours
+    用 RETR_EXTERNAL 只取最外层轮廓，硬币压在纸上时币属于**嵌套轮廓，会被整个
+    丢掉**，只剩一张纸 —— 于是报「没找到可信的圆形目标」，而现场人完全看不出
+    自己错在哪。实测 a01.jpg 就是这么废的。
+    """
+    g = preprocess.gray(img)
+    edges = cv2.Canny(preprocess.gaussian_blur(g, config_setting.gaussian_kernel),
+                      config_setting.canny_low, config_setting.canny_high)
+    contours = detector.find_contours(edges, config_setting.min_area)
+    if not contours:
+        return ['一个轮廓都没有：检查曝光/对比度，或镜头是否被挡']
+    f = max((detector.calculate_features(c) for c in contours),
+            key=lambda x: x['area'])
+    dia = f['diameter_pixels'] / config_setting.ppm
+    cx, cy = f['center']
+    out = [f'画面最大轮廓：等效直径 {dia:.0f}mm，圆形度 {f["circularity"]:.3f}，'
+           f'中心 ({cx:.0f}, {cy:.0f})']
+    if dia > 60:
+        out.append(f'  {dia:.0f}mm 远超任何硬币（最大 25mm），这不是币')
+        tx, ty = config_setting.calib_center
+        if abs(cx - tx) < 200 and abs(cy - ty) < 200:
+            out.append('  中心又与标定纸心重合 => 就是那张 A4 参照纸。'
+                       '纸只用于标定，量硬币前必须撤掉：币压在纸上会被当嵌套轮廓丢掉')
+    else:
+        out.append('  最大轮廓比硬币还小，说明币没入画或被遮挡；'
+                   '若币在画面里但圆形度偏低，多半是虚焦或币面反光')
+    return out
+
 
 def nudge(tx: float, ty: float, cx: float, cy: float, ppm: float,
           min_mm: float = 2.0) -> tuple[float, float, list[tuple[str, float]]]:
@@ -199,7 +230,10 @@ def main() -> None:
              for c in detector.find_contours(edges, config_setting.min_area)]
     coins = [f for f in coins if f['circularity'] >= config_setting.min_circularity]
     if not coins:
-        sys.exit("没找到可信的圆形目标：硬币没入画、被遮挡，或者对比度不够")
+        print('[NG] 没找到可信的圆形目标，先看清为什么：')
+        for line in explain_no_coin(img):
+            print('  ' + line)
+        sys.exit(1)
 
     coin = args.coin or guess_coin(args.image)
     spec = config_setting.coin_specs.get(coin)
