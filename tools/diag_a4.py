@@ -75,7 +75,16 @@ def main() -> None:
     stray = bright - areas[0] / (w * h)
     m = calibration.measure_a4(img, args.long, args.short, 99.0)   # 放宽阈值拿全部数字，判卷在下面自己下
     m_diff = abs(m['ppm_long'] - m['ppm_short']) / m['ppm_long']
-    span = m['long_px'] / max(w, h)
+    # 裁角风险要按「纸在哪个轴上就除以那个轴」算。原先写 long_px / max(w, h)：
+    # 竖构图里纸的长边是横着摊开的，它却拿画面最长边（竖向 4096）去除，
+    # 于是报 72.4%「留白充足」，而真实横向占比是 96.4%、每侧只剩 5.5mm ——
+    # 差 24 个百分点，而且方向是「把危险报成安全」，正是本项目最忌的静默错值。
+    ext_x = float(box[:, 0].max() - box[:, 0].min())
+    ext_y = float(box[:, 1].max() - box[:, 1].min())
+    span = max(ext_x / w, ext_y / h)
+    margin_mm = min((w - ext_x) / 2, (h - ext_y) / 2) / m['ppm']
+    print(f"纸占画面 横向 {ext_x / w * 100:.1f}% / 纵向 {ext_y / h * 100:.1f}%（取较大者判裁角风险）"
+          f" | 最紧一侧每侧留白 {margin_mm:.1f}mm —— 挪机时不许超过这个数")
     grad = 0.0
     if len(m['sides']) == 4:   # 只有四边形算子给得出逐边长度，Otsu 兜底时退化为外接矩形（梯度恒 0）
         s = m['sides']
@@ -86,7 +95,7 @@ def main() -> None:
         ('FAIL', '长短边 ppm 互差 < 1%', m_diff < 0.01, f'{m_diff * 100:.2f}%'),
         ('WARN', '轮廓/矩形填充率 > 97%', fill > 0.97, f'{fill * 100:.1f}%'),
         ('WARN', '亮区几乎全是纸（杂亮 < 2%）', stray < 0.02, f'{stray * 100:.1f}%'),
-        ('WARN', '纸占画面长边 < 95%（太满易裁角）', span < 0.95, f'{span * 100:.1f}%'),
+        ('WARN', '纸占画面（两轴取大）< 95%（太满易裁角）', span < 0.95, f'{span * 100:.1f}%'),
         ('WARN', '纸面平均灰度 150~240', 150 <= mean_in <= 240, f'{mean_in:.0f}'),
         ('WARN', '纸面饱和=255 占比 < 5%', clipped < 5.0, f'{clipped:.1f}%'),
         ('WARN', '比例尺梯度（对边差）< 0.5%', grad < 0.005, f'{grad * 100:.2f}%'),
