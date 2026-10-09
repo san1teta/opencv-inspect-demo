@@ -9,7 +9,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tools')))
 
-from check_placement import guess_coin, nudge, verdict, SCALE_GUARD_MM, BLUR_GUARD_PX  # noqa: E402
+from check_placement import guess_coin, nudge, verdict, SCALE_GUARD_MM, BLUR_GUARD_MM  # noqa: E402
 
 PPM = 9.9749
 T = (1000.0, 1000.0)   # 纸心
@@ -49,12 +49,12 @@ class TestVerdict(unittest.TestCase):
     """三关必须同过。旧版只校验位置，放过了量成 22.17mm 的 1元 —— 它校验了唯一没坏的那一项。"""
 
     def test_all_three_clear_is_ok(self):
-        tag, bad = verdict(9.1, 0.08, 2.5)
+        tag, bad = verdict(9.1, 0.08, 0.25)
         self.assertEqual((tag, bad), ('OK', []))
 
     def test_scale_failure_overrides_good_position(self):
         """现场事故原样复现：位置 9.1mm 很好，但直径离标称 2.83mm。"""
-        tag, bad = verdict(9.1, -2.83, 2.5)
+        tag, bad = verdict(9.1, -2.83, 0.25)
         self.assertEqual(tag, 'NG')
         self.assertIn('比例尺', bad[0])
 
@@ -63,7 +63,23 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(verdict(9.1, 0.0, float('nan'))[0], 'OK')
 
     def test_blur_just_over_guard_fails(self):
-        self.assertEqual(verdict(9.1, 0.0, BLUR_GUARD_PX + 0.1)[0], 'NG')
+        self.assertEqual(verdict(9.1, 0.0, BLUR_GUARD_MM + 0.01)[0], 'NG')
+
+    def test_blur_gate_lives_in_mm_not_px(self):
+        """判据必须留在毫米域。
+
+        原先是 BLUR_GUARD_PX = 3.0。今天重标定 ppm 从 9.9749 掉到 8.6620（-13.2%），
+        同一个 3px 的物理含义就从 0.301mm 变成 0.346mm —— 代码一个字没改、
+        测试照样全绿、门槛却自己松了 15%。这是「数值没变但含义变了」那一类静默错值，
+        本项目已经反复踩，所以把单位钉死在名字和断言里。
+        """
+        self.assertEqual(BLUR_GUARD_MM, 0.30)
+        self.assertTrue(BLUR_GUARD_MM < 0.25 * 2)      # 不许宽到能吃掉整个直径允差
+        # 同一条 0.30mm 的物理判据，在两次标定下对应的像素数不同。
+        # 若门限仍写成「3px」，重标定就会让它悄悄松 15% 而无人察觉。
+        self.assertLess(3.0 / 9.9749, 3.0 / 8.6620)
+        self.assertEqual(verdict(9.1, 0.0, 2.8 / 9.9749)[0], 'OK')   # 2.8px @旧 ppm = 0.281mm
+        self.assertEqual(verdict(9.1, 0.0, 2.8 / 8.6620)[0], 'NG')   # 2.8px @新 ppm = 0.323mm
 
     def test_scale_guard_is_wider_than_the_tolerance(self):
         """闸门必须比 tol 宽得多，否则正常公差波动会被当成标定失效。"""

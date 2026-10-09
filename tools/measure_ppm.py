@@ -31,7 +31,10 @@ def write_ppm(config_path: str, ppm: float, img_size: tuple[int, int],
     today = datetime.date.today().isoformat()
     targets = [
         (r'(?m)^ppm\s*=',
-         f"ppm = {ppm:.4f}  # A4 实测于 {today}，旧值 10.0 是演示假定值"),
+         # 别在这里写死「旧值 X」—— 那是第一次标定时才成立的话，重标定一次就变成假注释。
+         # 改成印 1px 的微米数：这才是读 ppm 的人真正想要的量，且永远自洽。
+         f"ppm = {ppm:.4f}  # A4 实测于 {today}，1px = {1000 / ppm:.1f} 微米；"
+         f"装置动过就必须重标定（标定与拍摄要背靠背，见 HANDOFF）"),
         (r'(?m)^calib_image_size\s*=',
          f"calib_image_size = ({img_size[0]}, {img_size[1]})"
          f"  # 标定图宽高，测量图必须与此一致"),

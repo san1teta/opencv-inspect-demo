@@ -39,10 +39,12 @@ PLACE_TOL_MM = 50.0
 # 1元 量成 22.17mm（-11%），而当时工具只看偏移，照样报「合格」。
 SCALE_GUARD_MM = 2.0
 
-# 清晰度闸门：外缘 10~90% 过渡宽度。锐利边实测 1~2px；糊到 3px 以上时边缘定位
-# 抖动就会把 0.25mm 允差吃光。同一张糊片（8.5px）的圆形度从完美圆的 0.99 掉到 0.904，
-# 已经贴着 min_circularity=0.9 的门槛 —— 再糊一点就整批判不出。
-BLUR_GUARD_PX = 3.0
+# 清晰度闸门：外缘 10~90% 过渡宽度。**必须按毫米定，不能按像素定。**
+# 原先写死 3px：今天重标定 ppm 从 9.9749 掉到 8.6620，同一个 3px 悄悄从 0.30mm
+# 变成 0.35mm —— 代码一个字没改，判据却松了 15%，而且不会有任何报错。
+# 这种「数值没变但含义变了」的坑本项目已经反复踩，所以把物理量留在毫米域，
+# 像素只在测量时用一次。锐利边实测 1~2px（旧 ppm 下），0.30mm 对应原来的 3px。
+BLUR_GUARD_MM = 0.30
 
 
 def guess_coin(path: str) -> str:
@@ -105,9 +107,9 @@ def edge_blur_px(gray: np.ndarray, cx: float, cy: float, r_edge: float) -> float
     return float(r_lo - r_hi)
 
 
-def verdict(dist_mm: float, dev_mm: float | None, blur_px: float,
+def verdict(dist_mm: float, dev_mm: float | None, blur_mm: float,
             tol_mm: float = PLACE_TOL_MM) -> tuple[str, list[str]]:
-    """三项判据汇总成 (代号, 待修事项)。任一不过就不给 OK。
+    """三项判据汇总成 (代号, 待修事项)。任一不过就不给 OK。三个量全在毫米域。
 
     顺序按「先修哪个才不会白拍」排：比例尺 > 清晰度 > 位置。
     比例尺错了整批数据全废；清晰度错了重拍就能救；位置偏了挪一下就行。
@@ -115,9 +117,9 @@ def verdict(dist_mm: float, dev_mm: float | None, blur_px: float,
     bad: list[str] = []
     if dev_mm is not None and abs(dev_mm) > SCALE_GUARD_MM:
         bad.append(f'比例尺：直径离标称 {dev_mm:+.2f}mm，ppm 已失效，重拍标定图并 --write')
-    if not math.isnan(blur_px) and blur_px > BLUR_GUARD_PX:
-        bad.append(f'清晰度：外缘 10-90% 过渡 {blur_px:.1f}px > {BLUR_GUARD_PX:g}px，'
-                   f'对上硬币点屏幕锁定对焦/AE，或加光缩短快门')
+    if not math.isnan(blur_mm) and blur_mm > BLUR_GUARD_MM:
+        bad.append(f'清晰度：外缘 10-90% 过渡 {blur_mm:.3f}mm > {BLUR_GUARD_MM:g}mm，'
+                   f'改手动对焦并放大核对纸缘/币缘锐度，或加光缩短快门')
     if dist_mm > tol_mm:
         bad.append(f'位置：偏离纸心 {dist_mm:.1f}mm > {tol_mm:g}mm')
     return ('OK' if not bad else 'NG'), bad
@@ -185,13 +187,14 @@ def main() -> None:
         dist = (dx * dx + dy * dy) ** 0.5 / ppm
         dia = f['diameter_pixels'] / ppm
         dev = round(dia - spec['diameter'], 3) if spec else None
-        blur = edge_blur_px(gray, cx, cy, f['diameter_pixels'] / 2)
-        tag, bad = verdict(dist, dev, blur)
+        blur_px = edge_blur_px(gray, cx, cy, f['diameter_pixels'] / 2)
+        blur_mm = blur_px / ppm
+        tag, bad = verdict(dist, dev, blur_mm)
         failed += bool(bad)
         col = (0, 200, 0) if tag == 'OK' else (0, 0, 255)
         cv2.circle(vis, (cx, cy), int(f['diameter_pixels'] / 2), col, thick)
         cv2.line(vis, (cx, cy), (int(tx), int(ty)), (0, 0, 255), thick)
-        b = '' if math.isnan(blur) else f" 缘宽{blur:.1f}px"
+        b = '' if math.isnan(blur_px) else f" 缘宽{blur_mm:.3f}mm({blur_px:.1f}px)"
         print(f"  目标{i} 圆心({cx},{cy}) 直径 {dia:.3f}mm{b}  偏离纸心 {dist:.1f}mm [{tag}]")
         for msg in bad:
             print(f"        [x] {msg}")
