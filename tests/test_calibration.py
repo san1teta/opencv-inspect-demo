@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 import cv2
 import numpy as np
 
-from calibration import pixels_to_mm, measure_a4, measure_ppm_from_a4
+from calibration import pixels_to_mm, measure_a4, measure_ppm_from_a4, quad_center
 
 
 def synthetic_a4(ppm: float = 4.0, angle: float = 17.0, coin: bool = True) -> np.ndarray:
@@ -115,6 +115,71 @@ class TestVerifyPpm(unittest.TestCase):
             self.assertTrue(any('装置可能漂移' in m for m in cm.output))
         finally:
             config_setting.ppm = original
+
+
+class TestQuadCenter(unittest.TestCase):
+    """纸心必须是「物理中心的像」，不是四个顶点的平均。
+
+    射影变换保持共线与共点：矩形两条对角线交于物理中心，变换后仍是这个四边形的两条
+    对角线，所以**交点 = 物理中心的像**。顶点平均落在「像素中点」上，而纸的近端占了
+    更多像素，于是它被系统性拉向近边 —— 只要画面有透视，这个偏差就是恒定的系统量。
+
+    2026-10-10 实拍标定图上两者差 0.93mm（左右 0.86 为主），方向和当天最大的那条梯度
+    （短边对 1.16% = 横滚，左边离镜头更近）完全一致，不是巧合。
+    """
+
+    # 理想 A4 的角，顶点顺序与 QUAD 对应（TL / BL / BR / TR）
+    # 用 np.array(..., dtype) 而不是 np.float32(...)：后者 pyright 认成标量构造器，
+    # 会把整片 ndarray 推断全废掉（本次就是这么炸出 17 条错误的）。
+    RECT = np.array([[0, 0], [0, 210], [297, 210], [297, 0]], np.float32)
+    # 今天 a4_today.jpg 真实检出的四角（左1831/下2579/右1810/上2561 px）
+    QUAD = np.array([[251, 503], [238, 2334], [2817, 2335], [2812, 525]], np.float32)
+
+    def _true_centre(self, quad: np.ndarray) -> np.ndarray:
+        """把理想矩形单应变换到 quad，取物理中心 (148.5, 105) 的像 —— 这就是 ground truth。"""
+        m = cv2.getPerspectiveTransform(self.RECT, quad)
+        return cv2.perspectiveTransform(np.array([[[148.5, 105.0]]], np.float32), m)[0][0]
+
+    @staticmethod
+    def _d(a, b) -> float:
+        return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+    def test_intersection_is_the_projected_physical_centre(self):
+        want = self._true_centre(self.QUAD)
+        got = quad_center(self.QUAD)
+        self.assertLess(self._d(got, want), 0.5,
+                        f'quad_center {got} 偏离单应真值 {want}')
+
+    def test_vertex_mean_is_biased_toward_the_near_edge(self):
+        """旧估计量必须明显更差，否则这次改动没有意义 —— 顺便把偏差量钉在案。"""
+        want = self._true_centre(self.QUAD)
+        d_old = self._d(self.QUAD.mean(axis=0), want)
+        d_new = self._d(quad_center(self.QUAD), want)
+        self.assertGreater(d_old, 5.0, f'顶点平均只差 {d_old:.1f}px，夹具没造出透视')
+        self.assertLess(d_new, d_old / 10)
+
+    def test_axis_aligned_rectangle_matches_vertex_mean(self):
+        """无透视时两者重合 —— 保证改动不会动到正放场景的结果。"""
+        r = np.array([[100, 150], [100, 716], [900, 716], [900, 150]], np.float32)
+        got, want = quad_center(r), r.mean(axis=0)
+        self.assertAlmostEqual(got[0], float(want[0]), places=6)
+        self.assertAlmostEqual(got[1], float(want[1]), places=6)
+
+    def test_degenerate_quad_falls_back_instead_of_crashing(self):
+        """四点共线 → 对角线平行，退回顶点平均，不能 ZeroDivisionError。"""
+        got = quad_center(np.array([[0, 0], [0, 10], [0, 20], [0, 30]], np.float32))
+        self.assertAlmostEqual(got[0], 0.0, places=6)
+        self.assertAlmostEqual(got[1], 15.0, places=6)
+
+    def test_measure_a4_end_to_end_returns_the_intersection(self):
+        """端到端：走完整检测链拿到的 center 也得是交点。approxPolyDP 有量化，放宽到 3px。"""
+        trap = _flat_paper([[100, 100], [900, 100], [760, 1300], [240, 1300]])
+        m = measure_a4(trap, 297.0, 210.5, tol=99.0)
+        self.assertEqual(m['method'], 'quad')
+        want = self._true_centre(np.array([[100, 100], [240, 1300], [760, 1300], [900, 100]],
+                                          np.float32))
+        self.assertLess(self._d(m['center'], want), 3.0,
+                        f"measure_a4 的 center {m['center']} 距真中心 {want}")
 
 
 if __name__ == '__main__':

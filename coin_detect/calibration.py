@@ -13,6 +13,31 @@ def pixels_to_mm(pixels: float, ppm: float) -> float:
     return pixels / ppm
 
 
+def quad_center(p: np.ndarray) -> tuple[float, float]:
+    """四边形两条对角线的交点 —— 它就是原矩形物理中心的像。
+
+    为什么不能用四个顶点的平均值：射影变换保持共线与共点。矩形的两条对角线交于物理中心，
+    变换后仍是这个四边形的两条对角线，所以**交点 = 物理中心的像**，这是唯一与几何定义
+    一致的估计量。顶点平均落在「像素中点」上，而纸的近端占了更多像素，于是顶点平均被
+    系统性拉向近边。
+
+    本装置 2026-10-10 实测：顶点平均 (1529.5, 1424.2) vs 交点 (1536.9, 1421.1)，
+    差 **0.93mm**（左右 0.86 / 上下 0.36，与长边对 0.70%、短边对 1.16% 的梯度方向一致 ——
+    左边离镜头更近，所以真纸心偏右）。对直径测量本身影响可忽略（那点距离上 ppm 只变
+    约 0.0008mm），但 `calib_center` 这个名字承诺的是「纸心」，就该给出纸心：币压在
+    直尺找出的纸心上时，`check_placement` 报出的「偏离纸心」不该含这 0.93mm 系统量。
+    """
+    a1, a2 = p[0], p[2]
+    b1, b2 = p[1], p[3]
+    d1, d2 = a2 - a1, b2 - b1
+    den = float(d1[0] * d2[1] - d1[1] * d2[0])
+    if abs(den) < 1e-9:                 # 对角线平行 = 四边形退化，退回顶点平均而不是崩掉
+        c = np.asarray(p, dtype=np.float64).mean(axis=0)
+        return float(c[0]), float(c[1])
+    t = float(((b1[0] - a1[0]) * d2[1] - (b1[1] - a1[1]) * d2[0]) / den)
+    return float(a1[0] + t * d1[0]), float(a1[1] + t * d1[1])
+
+
 def quad_sides(gray: np.ndarray) -> tuple[list[float], tuple[float, float]] | None:
     """边缘 + 四边形拟合找纸：主动忽略杂物（凳腿/木纹/锁边线都不是大四边形）。
 
@@ -33,8 +58,8 @@ def quad_sides(gray: np.ndarray) -> tuple[list[float], tuple[float, float]] | No
         sides = [float(np.linalg.norm(p[i] - p[(i + 1) % 4])) for i in range(4)]
         if min(quad_pair_means(sides)) < 20:
             continue
-        c = p.mean(axis=0)
-        return sides, (float(c[0]), float(c[1]))
+        c = quad_center(p)
+        return sides, c
     return None
 
 
