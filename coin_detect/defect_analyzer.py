@@ -19,9 +19,10 @@ def judge_quality(diameter_mm: float, deficit_mm: float, circularity: float,
                   coin_name: str) -> dict[str, Any]:
     """两路独立判据，取更差的一档作总评：尺寸超差（直径）+ 边缘缺损（径向最大凹陷）。
 
-    为什么必须两路 —— 实测数据（合成缺口，见 tools/selftest_measure.py 第 2 节）：
-    啃掉 1mm 深的缺口，等效直径只变小 0.035mm，只有允差 0.25mm 的 1/7，尺寸路必然放过；
-    同一枚的径向凹陷如实报出 1.001mm。反过来，整体磨小时径向凹陷恒为 ~0.10mm（噪声底），
+    为什么必须两路 —— 实测数据（合成缺口，见 tools/selftest_measure.py 第 2 节，
+    2026-10-10 在当前标定 ppm=8.6510 下重测）：
+    啃掉 1mm 深的缺口，等效直径只变小 0.043mm，只有允差 0.25mm 的 1/6，尺寸路必然放过；
+    同一枚的径向凹陷如实报出 0.992mm。反过来，整体磨小时径向凹陷恒为 ~0.11mm（噪声底），
     不会误报成刀口。两路各管各的，所以取 max 而不是相加。
     """
     result: dict[str, Any] = {

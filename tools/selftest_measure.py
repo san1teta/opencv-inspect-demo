@@ -37,6 +37,16 @@ def make_coin(diameter_mm: float, ppm: float, w: int, h: int,
     return img, 2 * r / ppm
 
 
+def _bucket(x: float) -> str:
+    """按 defect_light/mid/heavy 把凹陷深度映射到档名（0 视为无缺口）。"""
+    for name, lim in (('合格', config_setting.defect_light),
+                      ('轻度', config_setting.defect_mid),
+                      ('中度', config_setting.defect_heavy)):
+        if x <= lim:
+            return name
+    return '重度'
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="合成硬币测量链自检")
     ap.add_argument("--coin", default="1元")
@@ -81,21 +91,35 @@ def main() -> None:
 
     print('== 2) 缺口深度扫描（缺损路）==')
     print('   这一节证明为什么不能只看直径：缺口是局部事件，面积等效直径是全局量，抓不住')
+    print('   ⚠ 判据是**分档对不对 + 偏差有没有失控**，不是**深度准不准**：质心会被啃掉的')
+    print('     材料推向缺口反向，缺口越深低估越多（实测 1元 3.0mm 报 2.539 = −15%，')
+    print('     1角 报 2.465 = −18%）。这是估计量的已知性质，不是代码 bug。旧判据写的是')
+    print('     绝对 0.15mm，等于把门限定在探测器自身偏差之内 —— 与 edge_check_mm=0.3')
+    print('     那个错同因，结果是对着正常行为常态性 FAIL，而这个工具的意义恰恰是「它报错')
+    print('     就一定是代码问题」。常态化误报的自检会把人训练成不看它的输出。')
     base = pipeline.process_single_frame(make_coin(std, ppm, w, h)[0], args.coin)[1][0]
+    notch_bad = 0
     for nick in (0.0, 0.5, 1.0, 2.0, 3.0):
         img, _ = make_coin(std, ppm, w, h, nick_mm=nick)
         det = pipeline.process_single_frame(img, args.coin)[1][0]
         res = det['result']
         grades.add(res['severity'])
         dd = det['diameter_mm'] - base['diameter_mm']
-        flag = 'PASS' if abs(res['deficit_mm'] - nick) < 0.15 else 'FAIL'
-        print(f"缺口 {nick:4.1f}mm -> 测得凹陷 {res['deficit_mm']:5.3f}mm [{flag}]  "
+        got = res['deficit_mm']
+        rel = (got - nick) / nick * 100 if nick else float('nan')
+        ok = _bucket(got) == _bucket(nick) and (nick == 0 or abs(rel) < 25)
+        notch_bad += 0 if ok else 1
+        rels = f'{rel:+5.1f}%' if nick else '  —  '
+        print(f"缺口 {nick:4.1f}mm -> 测得凹陷 {got:5.3f}mm 相对{rels} "
+              f"[{'PASS' if ok else 'FAIL'}]  "
               f"直径只变 {dd:+.3f}mm  分级 {res['severity']} 依据 {res['basis']}")
 
     missing = {'合格', '轻度', '中度', '重度'} - grades
     print()
     print("四档分级全部触发" if not missing else f"未触发的分级：{'、'.join(sorted(missing))}")
-    if worst >= 0.05 or missing:
+    if notch_bad:
+        print(f"   ⚠ 缺口扫描有 {notch_bad} 档落错分档或相对偏差超 25% —— 这才是代码问题")
+    if worst >= 0.05 or missing or notch_bad:
         sys.exit(1)
 
 

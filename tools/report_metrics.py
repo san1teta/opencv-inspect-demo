@@ -89,8 +89,15 @@ def _stats(folder: str, coin: str) -> dict | None:
               f"下面的均值/σ 已被污染："
               + '、'.join(os.path.basename(p) for p in stale[:8])
               + ('……' if len(stale) > 8 else ''))
-    ds, defs, cs, ms, grades, parts, flags = [], [], [], [], {}, {}, []
+    ds, defs, cs, ms, grades, parts, flags, ptot = [], [], [], [], {}, {}, [], {}
+    s_defs: dict[str, list[float]] = {}   # 按枚存缺损，才能只统计采信枚
+    s_circ: dict[str, list[float]] = {}   # 同上，圆度是定 min_circularity 的依据
+    s_sev: dict[str, list[str]] = {}      # 同上，分级也要能只算采信枚
     for name in names:
+        pid = _part_id(os.path.splitext(name)[0])
+        # 分母要按「这一枚实际有几张」算，不是「检出了几张」—— 漏检的那几张正是
+        # 拒收依据（见 config_setting.coin_spread_max_mm 那段），不记就永远看不见。
+        ptot[pid] = ptot.get(pid, 0) + 1
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)
         ms.append(this_ms)
         if det is not None:
@@ -98,19 +105,57 @@ def _stats(folder: str, coin: str) -> dict | None:
             defs.append(det['deficit'])
             cs.append(det['circ'])
             flags.append(det['flag'])
-            parts.setdefault(_part_id(os.path.splitext(name)[0]), []).append(det['d'])
+            parts.setdefault(pid, []).append(det['d'])
+            s_defs.setdefault(pid, []).append(det['deficit'])
+            s_circ.setdefault(pid, []).append(det['circ'])
             g = det['result']['severity']
             grades[g] = grades.get(g, 0) + 1
+            s_sev.setdefault(pid, []).append(g)
     if not names:
         return None
     return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs, 'cs': cs, 'parts': parts,
-            'ms': ms, 'grades': grades, 'flags': flags, 'coin': coin}
+            'pdefs': s_defs, 'pcirc': s_circ, 'psev': s_sev, 'ptot': ptot, 'ms': ms,
+            'grades': grades, 'flags': flags, 'coin': coin}
 
 
-def _spread(s: dict) -> list[str]:
-    """把散布拆成「重复性」和「枚间差异」—— 这两个不能混在一个 σ 里报。"""
+def _accept(s: dict) -> list[tuple[str, float, bool, str]]:
+    """枚级拒收判定。判据与来由全在 config_setting 的注释里，这里只执行。
+
+    返回 [(枚, 枚均值, 是否采信, 拒收原因)]。这一条是本项目第一次把「哪几枚的数
+    能要」写成显式规则 —— 之前报表把所有帧混进同一个 σ，等于默认每张都可信。
+    """
+    nom = config_setting.coin_specs[s['coin']]['diameter']
+    rows = []
+    for k in sorted(s['parts']):
+        v = s['parts'][k]
+        tot = s['ptot'].get(k, len(v))
+        why = []
+        if len(v) < tot:
+            why.append(f'{tot - len(v)}/{tot} 张未检出')
+        if len(v) > 1 and max(v) - min(v) > config_setting.coin_spread_max_mm:
+            why.append(f'组内极差 {max(v) - min(v):.3f}mm'
+                       f'>{config_setting.coin_spread_max_mm}mm')
+        mean = statistics.fmean(v)
+        if abs(mean - nom) > config_setting.coin_nominal_max_mm:
+            why.append(f'离标称 {mean - nom:+.3f}mm'
+                       f'>{config_setting.coin_nominal_max_mm}mm')
+        rows.append((k, mean, not why, '；'.join(why)))
+    return rows
+
+
+def _spread(s: dict, ok: set[str] | None = None) -> list[str]:
+    """把散布拆成「重复性」和「枚间差异」—— 这两个不能混在一个 σ 里报。
+
+    ok 给定时只用**枚级判定采信**的枚。这一步不是洁癖：b/j 那种整枚读错的组，
+    它自己的组内极差能到 0.24mm，混进来会把重复性 σ 从 0.01 抬到 0.09，
+    于是「这台机器重复性 0.09mm」成了假话 —— 真实重复性是被错样本拖累出来的。
+    """
+    parts = {k: v for k, v in s['parts'].items() if ok is None or k in ok}
     out = []
-    reps = {k: v for k, v in s['parts'].items() if len(v) > 1}
+    reps = {k: v for k, v in parts.items() if len(v) > 1}
+    if ok is not None and len(ok) < len(s['parts']):
+        out.append(f"      （枚级判定剔掉 {len(s['parts']) - len(ok)} 枚，"
+                   f"下面只统计采信的那 {len(ok)} 枚）")
     if reps:
         # 合并样本方差：同一枚内的散布才是测量重复性，跨枚平均会混进币的差异
         num = sum(statistics.variance(v) * (len(v) - 1) for v in reps.values())
@@ -120,7 +165,7 @@ def _spread(s: dict) -> list[str]:
                    f"（{len(reps)} 枚 x 各 {lo if lo == hi else f'{lo}~{hi}'} 次，自由度 {den}）")
     else:
         out.append("      重复性 σ 算不出：没有一枚被重拍过两次以上（命名没区分枚，或没放 repeat）")
-    means = [statistics.fmean(v) for v in s['parts'].values()]
+    means = [statistics.fmean(v) for v in parts.values()]
     if len(means) > 1:
         out.append(f"      枚间差异：{len(means)} 枚，均值极差 {max(means) - min(means):.3f}mm"
                    f"  ← n={len(means)} 太小，只能报观测极差，不能当群体 σ 用")
@@ -129,13 +174,21 @@ def _spread(s: dict) -> list[str]:
 
 
 def _fmt(s: dict) -> str:
-    mean = statistics.fmean(s['ds']) if s['ds'] else float('nan')
-    sd = statistics.stdev(s['ds']) if len(s['ds']) > 1 else 0.0
+    """头一行优先用**枚级判定采信**后的读数。
+
+    这行是最容易被直接抄进 README 的数，让它带着 b/e/j 那种整枚读错的样本，
+    等于把 0.42mm 的假 σ 当成机器能力去写精度声明。
+    """
+    vals = s.get('ads') or s['ds']
+    dv = s.get('adefs') or s['defs']
+    mean = statistics.fmean(vals) if vals else float('nan')
+    sd = statistics.stdev(vals) if len(vals) > 1 else 0.0
     nom = config_setting.coin_specs[s['coin']]['diameter']
     nf = sum(1 for x in s.get('flags', []) if x)
-    return (f"  {s['coin']:<3} n={s['hit']}/{s['n']} 检出  直径均值 {mean:7.3f}  σ={sd:.3f}mm  "
-            f"相对标称 {mean - nom:+.3f}mm  缺损max {max(s['defs']) if s['defs'] else float('nan'):.2f}  "
-            f"耗时 {statistics.fmean(s['ms']):.0f}ms/张  分级 {s['grades']}"
+    tag = '（仅采信枚）' if s.get('ads') else ''
+    return (f"  {s['coin']:<3} n={s['hit']}/{s['n']} 检出  直径均值 {mean:7.3f}{tag}  σ={sd:.3f}mm  "
+            f"相对标称 {mean - nom:+.3f}mm  缺损max {max(dv) if dv else float('nan'):.2f}  "
+            f"耗时 {statistics.fmean(s['ms']):.0f}ms/张  分级 {s.get('agrades') or s['grades']}"
             + (f"\n      ⚠ {nf}/{s['hit']} 张读数可疑（互检分叉或闭运算兜底）"
                f" —— 上面的 σ 与控制限被这些帧污染，别直接引用" if nf else ''))
 
@@ -170,24 +223,43 @@ def main() -> None:
 
     print('== 各面额 ==')
     for s in batches.values():
+        rows = _accept(s)
+        ok = {k for k, _, good, _ in rows if good}
+        s['ads'] = [d for k in ok for d in s['parts'][k]]
+        s['adefs'] = [d for k in ok for d in s['pdefs'].get(k, [])]
+        s['acs'] = [d for k in ok for d in s['pcirc'].get(k, [])]
+        gc: dict[str, int] = {}
+        for k in ok:
+            for g in s['psev'].get(k, []):
+                gc[g] = gc.get(g, 0) + 1
+        s['agrades'] = gc
         print(_fmt(s))
-        for line in _spread(s):
+        for k, mean, good, why in rows:
+            print(f"      枚 {k}: {mean:7.3f}mm  {'采信' if good else '拒收'}"
+                  + (f'  ← {why}' if why else ''))
+        for line in _spread(s, ok):
             print(line)
-        n_parts = len(s['parts'])
-        if n_parts >= 8 and len(s['ds']) > 1:
-            mean, sd = statistics.fmean(s['ds']), statistics.stdev(s['ds'])
-            out = [round(d, 3) for d in s['ds'] if abs(d - mean) > 3 * sd]
+        ads = s['ads']
+        n_parts = len(ok)
+        if n_parts >= 8 and len(ads) > 1:
+            mean, sd = statistics.fmean(ads), statistics.stdev(ads)
+            out = [round(d, 3) for d in ads if abs(d - mean) > 3 * sd]
             if out:
                 print(f"      离群点(>3σ) {out}  ← 先确认不是拍糊、放偏，或那枚真有缺口")
             print(f"      SPC 控制限 {mean - 3 * sd:.3f} ~ {mean + 3 * sd:.3f} mm")
         else:
-            print(f"      SPC 控制限不出：只有 {n_parts} 枚（需 >=8 枚不同硬币），"
+            print(f"      SPC 控制限不出：采信枚数 {n_parts}（需 >=8 枚不同硬币），"
                   f"重复拍的张数不能顶这个数 —— 同一枚的固定偏差不会随重拍平均掉")
 
     print('\n== 线性度（不需要卡尺的准确度证据）==')
-    order = [c for c in ('1角', '5角', '1元') if len(batches.get(c, {}).get('ds', [])) > 1]
+    def _val(s: dict) -> list[float]:
+        """线性度用**采信枚**的读数。混进 b 那种整枚读错 0.6mm 的样本，
+        面额差就跟着错 —— 而线性度正是我们唯一不依赖卡尺的准确度证据。"""
+        return s.get('ads') or s['ds']
+
+    order = [c for c in ('1角', '5角', '1元') if len(_val(batches.get(c, {'ds': []}))) > 1]
     for a, b in zip(order, order[1:]):
-        got = statistics.fmean(batches[b]['ds']) - statistics.fmean(batches[a]['ds'])
+        got = statistics.fmean(_val(batches[b])) - statistics.fmean(_val(batches[a]))
         want = config_setting.coin_specs[b]['diameter'] - config_setting.coin_specs[a]['diameter']
         flag = 'PASS' if abs(got - want) < 0.1 else 'FAIL'
         print(f"  {a}→{b} 实测差 {got:+.3f}mm  标称差 {want:+.1f}mm  残差 {got - want:+.3f}mm [{flag}]")
@@ -208,14 +280,18 @@ def main() -> None:
 
     print('\n== 缺损底噪（完好币凹陷分布，用来定 defect_light）==')
     for s in batches.values():
-        if s['defs']:
-            print(f"  {s['coin']}  中位 {statistics.median(s['defs']):.3f}  最大 {max(s['defs']):.3f}mm"
+        # 只用采信枚：b/e/j 那种闭到错结构上的帧会算出 2.4mm 的假缺损，
+        # 拿它去抬 defect_light 等于把检测器的错误校准成「正常底噪」。
+        dv = s.get('adefs') or s['defs']
+        if dv:
+            print(f"  {s['coin']}  中位 {statistics.median(dv):.3f}  最大 {max(dv):.3f}mm"
                   f"  ← 最大若已接近门限 {config_setting.defect_light}mm，说明齿边抬高了底噪，门限要重定")
 
     print('\n== 圆度分布（用来定 min_circularity）==')
     for s in batches.values():
-        if s['cs']:
-            print(f"  {s['coin']}  最小 {min(s['cs']):.3f}  中位 {statistics.median(s['cs']):.3f}"
+        cv_ = s.get('acs') or s['cs']
+        if cv_:
+            print(f"  {s['coin']}  最小 {min(cv_):.3f}  中位 {statistics.median(cv_):.3f}"
                   f"  当前门限 {config_setting.min_circularity}"
                   f"  ← 完好币最小值贴着门限就是定高了，会误杀良品；远低于门限则说明门限形同虚设")
         else:
