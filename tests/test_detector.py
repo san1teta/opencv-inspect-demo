@@ -157,5 +157,107 @@ class TestDiameterWindow(unittest.TestCase):
         self.assertTrue(lo <= f['diameter_pixels'] <= hi)
 
 
+class TestCircularityIsSpikeProof(unittest.TestCase):
+    """圆度不能被一根毛刺摧毁 —— 2026-10-10 实拍：同一枚完好 1角 的三张连拍，
+    面积只差 0.1%，外接圆被撑大 1.7mm，圆度 0.977 → 0.824，好币被判成形状不合格。
+    """
+
+    def test_spike_does_not_collapse_circularity(self):
+        for spike in (0, 8, 16, 24):
+            with self.subTest(spike_px=spike):
+                f, _ = _spiked(25.0, spike)
+                self.assertGreater(f['circularity'], config_setting.min_circularity,
+                                   f'毛刺 {spike}px 把圆度压到 {f["circularity"]:.3f}')
+
+    def test_a_real_notch_still_lowers_circularity(self):
+        """反过来也得成立：真缺口是整段弧缺失，不能被稳健半径当成离群点滤掉。"""
+        intact, _ = _measure(25.0)
+        nicked, _ = _measure(25.0, nick_mm=3.0)
+        self.assertLess(nicked['circularity'], intact['circularity'] - 0.01)
+
+
+class TestCaliperDiameter(unittest.TestCase):
+    """齿顶对径：与卡尺同口径的量。面积等效把齿槽算成「少掉的面积」，读数落在齿根侧
+    （卡尺实测 1元 22.25mm，面积等效只有 22.04mm，-0.21mm 吃掉允差的 84%）。
+    """
+
+    def test_bias_is_constant_not_proportional(self):
+        """齿顶直径带一个 **+0.12mm 的恒定外扩**（Canny 环外多边形比真实边缘外扩 1.2px，
+        而扇区取的是最外缘半径，把这个外扩全收了）。
+
+        关键不是它有没有偏，而是**偏得不随尺寸变**：19/20.5/25mm 三档实测
+        +0.121 / +0.130 / +0.122mm。常数偏移可以被「按面额用良品均值定允差中心」一口吃掉；
+        如果是比例误差（随直径变大而变大），换面额就得重标，那才可怕。
+        面积等效直径没有这个问题（它靠面积，带宽的外扩被平均掉了，实测 +0.014mm），
+        但它被齿槽拉向齿根（-0.21mm 且逐枚不同）—— 两个量各有一种偏，所以两个都留着。
+        """
+        errs = []
+        for d in (19.0, 20.5, 25.0):
+            with self.subTest(diameter=d):
+                f, drawn = _measure(d)
+                e = f['caliper_diameter_pixels'] / PPM - drawn
+                self.assertGreater(e, 0.0, '外扩方向必须为正（Canny 外多边形）')
+                self.assertLess(e, 0.20)
+                errs.append(e)
+        self.assertLess(max(errs) - min(errs), 0.05,
+                        f'偏移随尺寸漂移了 {max(errs) - min(errs):.3f}mm，不能当常数吸收')
+
+    def test_notch_barely_moves_it(self):
+        """卡尺夹的是两端齿顶，中间啃掉一块它几乎不缩 —— 所以尺寸路和缺损路必须分开。
+        这条同时说明：换上齿顶直径不会把真缺陷洗成合格，缺损另有 deficit 判据兜着。
+        """
+        intact, _ = _measure(25.0)
+        nicked, _ = _measure(25.0, nick_mm=2.0)
+        self.assertLess(abs(intact['caliper_diameter_pixels'] - nicked['caliper_diameter_pixels'])
+                        / PPM, 0.25)
+
+
+class TestBrokenRimRecovery(unittest.TestCase):
+    """币缘断成开口弧时，闭运算是唯一能找回它的手段（膨胀会把读数撑大）。
+
+    实拍：5角 a 那枚三张连拍全部「未检出」，而币缘梯度中位 236 = Canny 高门限的 1.6 倍，
+    说明边缘强得很，只是圆周上某段没过高门限导致环断开。开口弧被 RETR_EXTERNAL
+    当成细长轮廓，面积≈0，等效直径只剩 4.8mm，于是整个落在尺寸窗外。
+    """
+
+    @staticmethod
+    def _broken_ring(gap_px: int = 3) -> np.ndarray:
+        edges = np.zeros((240, 240), np.uint8)
+        cv2.circle(edges, (120, 120), 80, 255, 1)
+        cv2.rectangle(edges, (118, 36), (118 + gap_px, 46), 0, -1)   # 顶部切一个口
+        return edges
+
+    def test_open_arc_reads_almost_no_area(self):
+        """断口先要能被复现：开口弧被当成细带，enclosed area≈0，等效直径只剩几毫米。
+
+        这里必须绕过 `find_contours` 的 min_area 过滤直接取轮廓 —— 实拍那个签名恰恰是
+        「面积小到被 min_area 滤光，于是窗内一个候选都没有」，用过滤后的列表反而看不到。
+        """
+        raw = cv2.findContours(self._broken_ring(), cv2.RETR_EXTERNAL,
+                               cv2.CHAIN_APPROX_SIMPLE)[0]
+        cnt = max(raw, key=lambda c: cv2.arcLength(c, True))
+        self.assertLess(cv2.contourArea(cnt), 0.05 * np.pi * 80 ** 2,
+                        f'夹具没造出开口弧：enclosed area={cv2.contourArea(cnt):.0f}')
+
+    def test_closing_bridges_the_gap(self):
+        closed = preprocess.close_edges(self._broken_ring())
+        cnt = max(detector.find_contours(closed, 100), key=cv2.contourArea)
+        d = detector.calculate_features(cnt)['diameter_pixels'] / PPM
+        self.assertAlmostEqual(d, 160 / PPM, delta=0.15,
+                               msg=f'闭合后应读出 ~{160 / PPM:.2f}mm，实测 {d:.2f}')
+
+    def test_dilation_would_bias_the_reading(self):
+        """锁住「为什么是 CLOSE 不是 DILATE」：同一个缺口，膨胀读出来的直径系统性偏大。"""
+        ring = self._broken_ring()
+        d_close = detector.calculate_features(
+            max(detector.find_contours(preprocess.close_edges(ring), 100),
+                key=cv2.contourArea))['diameter_pixels'] / PPM
+        d_dilate = detector.calculate_features(
+            max(detector.find_contours(cv2.dilate(ring, np.ones((5, 5), np.uint8)), 100),
+                key=cv2.contourArea))['diameter_pixels'] / PPM
+        self.assertGreater(d_dilate - d_close, 0.05,
+                           f'膨胀只比闭合大 {d_dilate - d_close:.3f}mm，夹具或算法变了')
+
+
 if __name__ == '__main__':
     unittest.main()

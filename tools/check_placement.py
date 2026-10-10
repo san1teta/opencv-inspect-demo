@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from calib_guard import photo_vs_calibration  # noqa: E402
 import config_setting  # noqa: E402
 import detector  # noqa: E402
+import pipeline  # noqa: E402
 import image_io  # noqa: E402
 import preprocess  # noqa: E402
 
@@ -217,20 +218,14 @@ def nudge(tx: float, ty: float, cx: float, cy: float, ppm: float,
 
 
 def pick_coins(feats: list[dict], spec: dict | None, ppm: float) -> list[dict]:
-    """从候选轮廓里挑「像是这枚面额的币」。抽成纯函数是为了能直接测。
+    """已废弃的兼容壳，判据本体在 `detector.coin_candidates`。
 
-    有面额 → 用与 pipeline 同一个 `diameter_window`。圆度低（变形、被贴胶带）也**必须留下**：
-    那是质量结论，要让它活到报表里被如实判不合格，而不是在这里被当背景悄悄删掉。
-    这正是昨天 51 个假币那条坑的根因 —— 工具一条路、流水线一条路各长一套闸门。
-
-    没面额 → 没有标称直径可依，尺寸窗口无从构造，退回圆度筛。这是**降级**不是等价方案，
-    调用方会把「跳过直径校验」明说出来，不假装这道闸门有效。
+    留着只因为 test_placement 直接测它；main() 已经改走 `pipeline.find_coins`，
+    这样流水线 / 报表 / 验收三条路共用同一份检出规则。新代码不要调这个。
     """
-    if spec:
-        lo_px, hi_px = detector.diameter_window(spec['diameter'], ppm,
-                                                config_setting.diameter_gate_mm)
-        return [f for f in feats if lo_px <= f['diameter_pixels'] <= hi_px]
-    return [f for f in feats if f['circularity'] >= config_setting.min_circularity]
+    return detector.coin_candidates(feats, spec['diameter'] if spec else None, ppm,
+                                    config_setting.diameter_gate_mm,
+                                    config_setting.min_circularity)
 
 
 def main() -> None:
@@ -254,13 +249,13 @@ def main() -> None:
         print(f"[NG] {stale}")
 
     gray = preprocess.gray(img)
-    edges = preprocess.canny(preprocess.gaussian_blur(gray, config_setting.gaussian_kernel),
-                             config_setting.canny_low, config_setting.canny_high)
-    coins = [detector.calculate_features(c)
-             for c in detector.find_contours(edges, config_setting.min_area)]
     coin = args.coin or guess_coin(args.image)
     spec = config_setting.coin_specs.get(coin)
-    coins = pick_coins(coins, spec, ppm)
+    # 检出走 pipeline.find_coins —— 与流水线、报表同一份判据，含「币缘断成开口弧时
+    # 闭运算兜底」。以前这里自己 canny + find_contours + 窗口过滤走一遍，于是流水线
+    # 修好的东西验收工具享受不到 —— 同一个坑换个位置再踩一次。
+    pairs, edge_closed = pipeline.find_coins(img, coin)
+    coins = [f for _, f in pairs]
     if not coins:
         print('[NG] 没找到可信的圆形目标，先看清为什么：')
         for line in explain_no_coin(img):
@@ -291,7 +286,10 @@ def main() -> None:
         cv2.circle(vis, (cx, cy), int(f['diameter_pixels'] / 2), col, thick)
         cv2.line(vis, (cx, cy), (int(tx), int(ty)), (0, 0, 255), thick)
         b = '' if math.isnan(blur_px) else f" 缘宽{blur_mm:.3f}mm({blur_px:.1f}px)"
-        print(f"  目标{i} 圆心({cx},{cy}) 直径 {dia:.3f}mm{b}  偏离纸心 {dist:.1f}mm [{tag}]")
+        # 兜底必须说出来：闭合轮廓接出来的桥是一根「假边」，直径可能略偏。
+        # 悄悄兜底 = 悄悄用一套和正常检出不一样的几何去判合格。
+        c = '（原图币缘断开，闭运算兜底）' if edge_closed else ''
+        print(f"  目标{i} 圆心({cx},{cy}) 直径 {dia:.3f}mm{b}  偏离纸心 {dist:.1f}mm [{tag}]{c}")
         for msg in bad:
             print(f"        [x] {msg}")
         if dist > PLACE_TOL_MM and parts:

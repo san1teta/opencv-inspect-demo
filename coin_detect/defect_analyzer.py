@@ -33,32 +33,47 @@ def judge_quality(diameter_mm: float, deficit_mm: float, circularity: float,
         'basis': '未检测'
     }
 
-    if circularity < config_setting.min_circularity:
-        result['circularity'] = '不合格'
-        return result
-
     spec = config_setting.coin_specs[coin_name]
     deviation = round(diameter_mm - spec['diameter'], 2)
     excess = round(abs(deviation) - spec['tol'], 2)#滤除浮点垃圾
     result['deviation'] = deviation
     result['deficit_mm'] = round(deficit_mm, 3)
 
+    # 形状不合格是第三路判据，但**不再早退**。
+    # 原来这里是 `if circularity < min: return result`，于是形状一不合格就把
+    # deviation / deficit / severity 全部清空 —— 实拍里同一枚完好 1角 的三张连拍，
+    # 因为轮廓上一根一像素毛刺把外接圆撑大 1.7mm，圆度从 0.977 掉到 0.824，
+    # 那张好端端的数据在报表里就成了「未检测」，量出来的直径和缺损一起丢掉。
+    # 圆度是「形状合不合格」的结论，不是「这张图能不能测」的开关；
+    # 数值必须留下，否则 min_circularity 的分布永远攒不起来，而且误杀无法被发现。
+    shape_fail = circularity < config_setting.min_circularity
+    result['circularity'] = '不合格' if shape_fail else '合格'
+
     size_grade = _band(excess, 0, config_setting.grade_light, config_setting.grade_mid)
     edge_grade = _band(deficit_mm, config_setting.defect_light,
                        config_setting.defect_mid, config_setting.defect_heavy)
-    grade = max(size_grade, edge_grade)
+    shape_grade = 1 if shape_fail else 0     # 形状不合格至少算轻度
+    grade = max(size_grade, edge_grade, shape_grade)
     result['severity'] = GRADES[grade]
     if grade == 0:
         result['basis'] = '无'
+        result['direction'] = '未检测'
         return result
 
-    # 两路可能同时命中同一档，那就都写进依据，别只报一个把人误导
+    # 三路可能同时命中同一档，那就都写进依据，别只报一个把人误导
     basis = []
     if size_grade == grade:
         basis.append('尺寸' + ('偏大' if deviation > 0 else '偏小'))
     if edge_grade == grade:
         basis.append(f'刀口{deficit_mm:.2f}mm')
+    if shape_grade == grade:
+        basis.append(f'形状{circularity:.3f}')
     result['basis'] = '+'.join(basis)
-    result['direction'] = ('偏大' if deviation > 0 else '偏小') if size_grade == grade else '缺损'
+    if size_grade == grade:
+        result['direction'] = '偏大' if deviation > 0 else '偏小'
+    elif edge_grade == grade:
+        result['direction'] = '缺损'
+    else:
+        result['direction'] = '形状'
     return result
 

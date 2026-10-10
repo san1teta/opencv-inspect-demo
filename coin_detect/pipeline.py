@@ -15,42 +15,64 @@ import sys
 
 logger = logging.getLogger(__name__)
 
-def _drop_background(pairs: list[tuple[np.ndarray, dict[str, Any]]], coin_name: str) -> list[tuple[np.ndarray, dict[str, Any]]]:
-    """丢掉尺寸根本不像这个面额的轮廓 —— 它们是背景，不是币。
-
-    2026-10-09 第一张实拍才暴露出这一步缺失：鼠标垫织纹 + 画面下方一个失焦的桶，
-    batch 模式检出 51 个「币」（1.3~4.8mm），每个在 CSV 里占一行，均值/σ/检出率全废。
-    当时 check_placement 对同一张图只报 1 个目标，因为它自带 circularity 过滤 ——
-    闸门只长在工具里、没长在流水线上，而报表走的是流水线。
-
-    circularity 不能拿来当这里的闸门：圆度低是「这枚币变形了」，属于质量结论，
-    必须留在报表里判不合格；拿它当检出条件就会把最该报警的币悄悄吞掉。
-    """
+def _nominal(coin_name: str) -> float | None:
+    """这枚面额的标称直径；认不出面额返回 None（检出闸门随之降级，见 coin_candidates）。"""
     spec = config_setting.coin_specs.get(coin_name)
-    if spec is None:
-        return pairs
-    lo, hi = detector.diameter_window(spec['diameter'], config_setting.ppm,
-                                      config_setting.diameter_gate_mm)
-    kept = [(c, f) for c, f in pairs if lo <= f['diameter_pixels'] <= hi]
-    if pairs and not kept:
+    return spec['diameter'] if spec else None
+
+
+def _extract(edge_img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarray, dict[str, Any]]], list[dict[str, Any]]]:
+    """从一张边缘图里取出「像这枚面额」的轮廓，同时把全部特征带回来供诊断用。"""
+    contours = detector.find_contours(edge_img, config_setting.min_area)
+    feats = [detector.calculate_features(c) for c in contours]
+    kept = detector.coin_candidates(feats, _nominal(coin_name), config_setting.ppm,
+                                    config_setting.diameter_gate_mm,
+                                    config_setting.min_circularity)
+    # 用 id 集合回筛：feats 与 contours 同序构造，本次调用内对象唯一，不会串。
+    ids = {id(f) for f in kept}
+    return [(c, f) for c, f in zip(contours, feats) if id(f) in ids], feats
+
+
+def find_coins(img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarray, dict[str, Any]]], bool]:
+    """找币的唯一入口：预处理 → Canny → 轮廓 → 尺寸窗，币缘断开时自动闭运算兜底。
+
+    返回 ((轮廓, 特征) 列表, 是否走了闭运算兜底)。流水线、report_metrics、
+    check_placement 三处都从这里进 —— 判据只有一份，不会再出现「一条路修好了、
+    另一条路还在用旧规则」那种事（2026-10-09 的尺寸闸门就是这么漏的）。
+    """
+    gray = preprocess.gray(img)
+    edges = preprocess.canny(preprocess.gaussian_blur(gray, config_setting.gaussian_kernel),
+                             config_setting.canny_low, config_setting.canny_high)
+    pairs, feats = _extract(edges, coin_name)
+    if pairs:
+        return pairs, False
+    if not feats:
+        return [], False                      # 连轮廓都没有，闭运算也变不出东西来
+    # 币缘被 Canny 的滞后高门限切成开口弧 —— RETR_EXTERNAL 对开口弧算出的面积≈0，
+    # 等效直径只剩几毫米，于是全部落在尺寸窗外，表现为「画面里没有币」。
+    # 实拍复核证明币一直在：那 6 张「未检出」的币缘梯度中位 236~302，是 Canny 高门限
+    # 150 的 1.6~2 倍；同一枚 1角 同一秒的三张里 b03 闭合、b01/b02 断开。
+    # 断口取决于圆周上的受光分布，差一个像素就换结果 —— 靠重拍解决不了，必须兜底。
+    # 用闭运算而不是膨胀：膨胀会把直径系统性撑大 0.5~0.9mm（见 preprocess.close_edges）。
+    closed, _ = _extract(preprocess.close_edges(edges), coin_name)
+    if closed:
+        logger.info(f"{coin_name}：原图币缘断成开口弧检不到，闭运算找回 {len(closed)} 个目标")
+        return closed, True
+    nominal = _nominal(coin_name)
+    if nominal:
         # 全军覆没最可能是标定/距离出了问题，而不是「画面里没有币」，所以把最大候选的
         # 实际直径写进日志，别只留一句「未检出」让人去猜是哪一类错。
-        big = max((f for _, f in pairs), key=lambda f: f['area'])
-        logger.warning(f"{coin_name}：{len(pairs)} 个轮廓全部落在标称 "
-                       f"{spec['diameter']}±{config_setting.diameter_gate_mm}mm 之外"
+        big = max(feats, key=lambda f: f['area'])
+        logger.warning(f"{coin_name}：{len(feats)} 个轮廓（含闭运算兜底）全部落在标称 "
+                       f"{nominal}±{config_setting.diameter_gate_mm}mm 之外"
                        f"（最大者等效直径 {big['diameter_pixels'] / config_setting.ppm:.2f}mm、"
                        f"圆度 {big['circularity']:.3f}）—— 先查相机距离与 ppm，再确认币有没有入画")
-    return kept
+    return [], False
 
 
 def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray, list[dict[str, Any]]]:
     """单帧定义"""
-    gray_img = preprocess.gray(frame)
-    blur_img = preprocess.gaussian_blur(gray_img, config_setting.gaussian_kernel)
-    edge_img = preprocess.canny(blur_img, config_setting.canny_low, config_setting.canny_high)
-    contours = detector.find_contours(edge_img, config_setting.min_area)
-    pairs = _drop_background([(cnt, detector.calculate_features(cnt)) for cnt in contours],
-                             coin_name)
+    pairs, edge_closed = find_coins(frame, coin_name)
     all_features = []
     for cnt, features in pairs:
         diameter_mm = calibration.pixels_to_mm(features['diameter_pixels'], config_setting.ppm)
@@ -60,11 +82,18 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
         all_features.append({
             'contour': cnt,
             'diameter_mm': diameter_mm,
+            # 齿顶对径（卡尺等效）单独留着：面积等效直径被齿槽拉向齿根，逐枚偏差
+            # 0.07~0.29mm，尺寸合格判定早晚要换到这一列上，先把数存下来才能对比。
+            'caliper_mm': calibration.pixels_to_mm(features['caliper_diameter_pixels'],
+                                                   config_setting.ppm),
             # 数值圆度单独留一份：judge_quality 把 result['circularity'] 覆成了
             # 「合格/不合格」，光看报表拿不到分布，而 min_circularity=0.90 这条临时
             # 门限正是靠真样本的分布来定的。
             'circularity': features['circularity'],
             'deficit_point': features['deficit_point'],
+            # 轮廓是靠闭运算补断口找回来的 —— 必须让报表看得见，否则「兜底成功」
+            # 和「正常检出」混在同一列里，直径略偏也无人知情。
+            'edge_closed': edge_closed,
             'result': result
         })
         logger.debug(f"{coin_name}的结果是{result}")

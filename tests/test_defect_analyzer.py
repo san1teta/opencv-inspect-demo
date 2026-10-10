@@ -83,10 +83,26 @@ class TestCombination(unittest.TestCase):
         self.assertEqual(r['severity'], '重度')
         self.assertEqual(r['basis'], '尺寸偏大+刀口2.00mm')
 
-    def test_形状不合格早退(self):
+    def test_形状不合格不再清空其他列(self):
+        """形状不合格是**一路判据**，不是「这张图能不能测」的开关。
+
+        原来这里是 `return`，于是 deviation/deficit/severity 全被清空。实拍里同一枚
+        完好 1角 因为轮廓上一根一像素毛刺把外接圆撑大 1.7mm，圆度从 0.977 掉到 0.824，
+        一张好端端的数据在报表里就成了「未检测」，量出来的直径和缺损一起丢掉 ——
+        而 min_circularity 这条临时门限恰恰要靠这些分布来重定。
+        """
         r = _q(STD, deficit=3.0, circularity=0.5)
         self.assertEqual(r['circularity'], '不合格')
-        self.assertEqual(r['severity'], '未检测')
+        self.assertEqual(r['severity'], '重度', '刀口 3mm 是重度，不能被形状一路盖成未检测')
+        self.assertEqual(r['deficit_mm'], 3.0, '缺损数值必须留下')
+        self.assertEqual(r['deviation'], 0.0, '偏差数值必须留下')
+
+    def test_形状单独命中至少轻度(self):
+        """尺寸和边缘都在限内、只有形状不合格 → 至少轻度，且依据写明是形状。"""
+        r = _q(STD, deficit=0.10, circularity=0.85)
+        self.assertEqual(r['severity'], '轻度')
+        self.assertEqual(r['direction'], '形状')
+        self.assertIn('形状', r['basis'])
 
     def test_缺损量进报表(self):
         self.assertEqual(_q(STD, deficit=1.234)['deficit_mm'], 1.234)

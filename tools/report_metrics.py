@@ -31,6 +31,7 @@ import image_io  # noqa: E402
 import preprocess  # noqa: E402
 from batch_loader import is_sample  # noqa: E402  工具产物不算样本，理由见 batch_loader
 from calib_guard import stale_paths  # noqa: E402  新旧装置照片混批 = 报表作废，判据见该模块
+import pipeline  # noqa: E402  检出走 find_coins，与流水线共用一份判据
 
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(errors='replace')   # GBK 控制台别被一个字符带走整份报告
@@ -43,26 +44,23 @@ def _one(img: np.ndarray, coin: str) -> tuple[dict | None, float]:
     1) 币没入画时它选中背景团，照样给出一个直径 —— 于是「检出率」恒为 100%，
        数字好看但全是假的，而这恰恰是要拿去写 README 精度声明的那个数；
     2) 背景里比币大的东西（本装置画面下方那个失焦的桶）会把币顶掉。
+
+    检出本身改走 `pipeline.find_coins`：以前这里自己 canny + find_contours + 窗口过滤
+    走了一遍，等于和流水线各写一套判据 —— 2026-10-10 补的「币缘断口闭运算兜底」
+    就只有流水线有、报表没有，同一个坑换个位置再踩。现在三处共用一份。
     耗时口径不变，仍只量到 find_contours 为止，好让新旧 ms/张 可比。
     """
     t0 = time.perf_counter()
-    gray = preprocess.gray(img)
-    blur = preprocess.gaussian_blur(gray, config_setting.gaussian_kernel)
-    edges = preprocess.canny(blur, config_setting.canny_low, config_setting.canny_high)
-    contours = detector.find_contours(edges, config_setting.min_area)
+    pairs = pipeline.find_coins(img, coin)[0]
     ms = (time.perf_counter() - t0) * 1000
-    feats = [detector.calculate_features(c) for c in contours]
-    spec = config_setting.coin_specs[coin]
-    lo, hi = detector.diameter_window(spec['diameter'], config_setting.ppm,
-                                      config_setting.diameter_gate_mm)
-    feats = [f for f in feats if lo <= f['diameter_pixels'] <= hi]
-    if not feats:
+    if not pairs:
         return None, ms
-    f = max(feats, key=lambda x: x['area'])
+    f = max((f for _, f in pairs), key=lambda x: x['area'])
     ppm = config_setting.ppm
     d = f['diameter_pixels'] / ppm
     deficit = f['deficit_pixels'] / ppm
     return ({'d': d, 'deficit': deficit, 'circ': f['circularity'],
+             'caliper': f['caliper_diameter_pixels'] / ppm,
              'result': defect_analyzer.judge_quality(d, deficit, f['circularity'], coin)}, ms)
 
 
