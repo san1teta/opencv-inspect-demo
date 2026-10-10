@@ -41,11 +41,11 @@ def find_coins(img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarray, 
     另一条路还在用旧规则」那种事（2026-10-09 的尺寸闸门就是这么漏的）。
     """
     gray = preprocess.gray(img)
-    edges = preprocess.canny(preprocess.gaussian_blur(gray, config_setting.gaussian_kernel),
-                             config_setting.canny_low, config_setting.canny_high)
+    blur = preprocess.gaussian_blur(gray, config_setting.gaussian_kernel)
+    edges = preprocess.canny(blur, config_setting.canny_low, config_setting.canny_high)
     pairs, feats = _extract(edges, coin_name)
     if pairs:
-        return pairs, False
+        return _cross_check(pairs, blur), False
     if not feats:
         return [], False                      # 连轮廓都没有，闭运算也变不出东西来
     # 币缘被 Canny 的滞后高门限切成开口弧 —— RETR_EXTERNAL 对开口弧算出的面积≈0，
@@ -57,7 +57,7 @@ def find_coins(img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarray, 
     closed, _ = _extract(preprocess.close_edges(edges), coin_name)
     if closed:
         logger.info(f"{coin_name}：原图币缘断成开口弧检不到，闭运算找回 {len(closed)} 个目标")
-        return closed, True
+        return _cross_check(closed, blur), True
     nominal = _nominal(coin_name)
     if nominal:
         # 全军覆没最可能是标定/距离出了问题，而不是「画面里没有币」，所以把最大候选的
@@ -68,6 +68,34 @@ def find_coins(img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarray, 
                        f"（最大者等效直径 {big['diameter_pixels'] / config_setting.ppm:.2f}mm、"
                        f"圆度 {big['circularity']:.3f}）—— 先查相机距离与 ppm，再确认币有没有入画")
     return [], False
+
+
+def _cross_check(pairs: list[tuple[np.ndarray, dict[str, Any]]],
+                 blur: np.ndarray) -> list[tuple[np.ndarray, dict[str, Any]]]:
+    """并跑第二路读数（亚像素径向）做**互检**，不改上报值，只产生告警。
+
+    为什么是互检而不是替换：多边形读数在干净币上偏差只有 −0.005~−0.08mm，够好；
+    但它会被高边圈的**内台阶**骗，静默读小 1mm（j 那枚 22.25 读成 21.188，圆度 0.966
+    看起来完全健康，任何质量判据都发现不了）。径向法能看见那道内台阶之外的真实外缘，
+    但它自己在干净币上又系统性偏 −0.10mm、还会被眩光晕过冲 —— 当上报值不合格，
+    当**分歧探测器**刚好：两路分叉就说明有一路被几何骗了。
+    """
+    out = []
+    for cnt, f in pairs:
+        rm = detector.radial_measure(blur, f['center'], f['diameter_pixels'] / 2)
+        if not rm:
+            out.append((cnt, {**f, 'radial_mm': None, 'edge_suspect': False}))
+            continue
+        rad_mm = rm['radial_diameter_pixels'] / config_setting.ppm
+        poly_mm = f['diameter_pixels'] / config_setting.ppm
+        gap = abs(rad_mm - poly_mm)
+        suspect = gap > config_setting.edge_check_mm
+        out.append((cnt, {**f, **rm, 'radial_mm': rad_mm, 'edge_suspect': suspect}))
+        if suspect:
+            logger.warning(f"轮廓可疑：多边形 {poly_mm:.3f}mm vs 径向 {rad_mm:.3f}mm "
+                           f"差 {gap:.3f}mm > {config_setting.edge_check_mm}mm —— "
+                           f"上报值仍用多边形，但这个数别直接采信（轮廓可能被内台阶/眩光骗）")
+    return out
 
 
 def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray, list[dict[str, Any]]]:
@@ -82,12 +110,15 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
         all_features.append({
             'contour': cnt,
             'diameter_mm': diameter_mm,
-            # 齿顶对径（与卡尺同口径）单独留着：面积等效被齿槽拉向齿根，而实测与标称的差值
-            # 逐枚不同（0.03~0.29mm）。尺寸合格判定早晚要换到这一列，先把数存下来才能对比。
-            # ⚠ 那串差值里混着「样本本身偏小」和「标称公差」—— 这批样本没有卡尺实测值，
-            #    所以不能把它整个当成系统误差，也别宣称换列之后准确度提高了（还没基准）。
+            # 齿顶对径（与卡尺同口径）单独留着：面积等效把齿槽/内台阶当成「少掉的面积」。
+            # 尺寸合格判定早晚要换到这一列，先把数存下来才能对比。
             'caliper_mm': calibration.pixels_to_mm(features['caliper_diameter_pixels'],
                                                    config_setting.ppm),
+            # 互检两列：径向读数是**第二路独立测量**，只对照不参与判定；
+            # edge_suspect = 两路分叉超阈值，edge_closed = 靠闭运算补断口才定位到。
+            # 没有这两列，j 那种「静默读小 1mm、圆度还挺健康」的帧会在报表里一路「合格」。
+            'radial_mm': features.get('radial_mm'),
+            'edge_suspect': features.get('edge_suspect', False),
             # 数值圆度单独留一份：judge_quality 把 result['circularity'] 覆成了
             # 「合格/不合格」，光看报表拿不到分布，而 min_circularity=0.90 这条临时
             # 门限正是靠真样本的分布来定的。

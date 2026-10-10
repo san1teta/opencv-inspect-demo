@@ -263,5 +263,55 @@ class TestBrokenRimRecovery(unittest.TestCase):
                            f'膨胀只比闭合大 {d_dilate - d_close:.3f}mm，夹具或算法变了')
 
 
+class TestCrossCheckDetectsDoubleEdge(unittest.TestCase):
+    """两路读数必须**在双边缘场景下分叉** —— 这是互检存在的唯一理由。
+
+    夹具复现 j 那枚的几何：币面比高起的边圈亮得多（内台阶梯度强），且外缘断一段
+    → 多边形只能闭在内台阶上，静默读小；径向法看见的是真实外缘。
+    上报值仍用多边形（它在 9/10 的干净币上更准），但这一帧必须被标成可疑。
+    """
+
+    C = 250
+
+    @staticmethod
+    def _double_edge(rim_r=100, face_r=88, face=170, rim=90, bg=40, gap_deg=100) -> np.ndarray:
+        C = TestCrossCheckDetectsDoubleEdge.C
+        img = np.full((500, 500), bg, np.uint8)
+        cv2.circle(img, (C, C), rim_r, int(rim), -1)
+        # 先挖扇形、再补币面：顺序反了就变成「整个扇形没了」，那是缺口而不是外缘断裂
+        if gap_deg:
+            cv2.ellipse(img, (C, C), (rim_r + 2, rim_r + 2), 0,
+                        -gap_deg / 2, gap_deg / 2, int(bg), -1)
+        if face_r:
+            cv2.circle(img, (C, C), face_r, int(face), -1)
+        return img
+
+    def test_polygon_and_radial_diverge_on_double_edge(self):
+        # 夹具本身就是单通道灰度图，不能再过 preprocess.gray（cvtColor 对 1 通道会报错）
+        blur = preprocess.gaussian_blur(self._double_edge(), config_setting.gaussian_kernel)
+        edges = cv2.Canny(blur, config_setting.canny_low, config_setting.canny_high)
+        cnt = max(detector.find_contours(edges, config_setting.min_area), key=cv2.contourArea)
+        poly = detector.calculate_features(cnt)['diameter_pixels']
+        rad = detector.radial_measure(blur, (self.C, self.C), poly / 2)
+        self.assertIsNotNone(rad.get('radial_diameter_pixels'), '径向法没出数')
+        gap = abs(rad['radial_diameter_pixels'] - poly) / config_setting.ppm
+        self.assertGreater(gap, config_setting.edge_check_mm,
+                           f'两路只差 {gap:.3f}mm，夹具没复现出分叉，互检将形同虚设')
+
+    def test_plain_coin_agrees_within_threshold(self):
+        """干净币上两路必须**不**分叉，否则阈值一开就是满屏假告警。"""
+        C = self.C
+        img = np.full((500, 500), 40, np.uint8)
+        cv2.circle(img, (C, C), 100, 120, -1)
+        blur = preprocess.gaussian_blur(img, config_setting.gaussian_kernel)
+        edges = cv2.Canny(blur, config_setting.canny_low, config_setting.canny_high)
+        cnt = max(detector.find_contours(edges, config_setting.min_area), key=cv2.contourArea)
+        poly = detector.calculate_features(cnt)['diameter_pixels']
+        rad = detector.radial_measure(blur, (C, C), poly / 2)
+        gap = abs(rad['radial_diameter_pixels'] - poly) / config_setting.ppm
+        self.assertLess(gap, config_setting.edge_check_mm,
+                        f'干净币两路差 {gap:.3f}mm，超过阈值 {config_setting.edge_check_mm}')
+
+
 if __name__ == '__main__':
     unittest.main()

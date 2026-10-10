@@ -38,6 +38,94 @@ def _crest_radii(dist: np.ndarray, ang: np.ndarray, sectors: int = _SECTORS) -> 
     return crest
 
 
+def radial_measure(gray: np.ndarray, center: tuple[float, float], r_guess: float,
+                   sectors: int = 360, band: float = 0.35, step: float = 0.25,
+                   crest_q: float = 0.90, tol: float = 1.5) -> dict[str, Any]:
+    """亚像素径向边缘测量 —— **只用作与多边形读数互检，不作为上报值**。
+
+    为什么不当上报值：2026-10-10 连试三版，真图验收全不过（详见 HANDOFF 同日第十条）。
+    关键一条是干净币上它比多边形系统性偏 −0.10mm，而多边形在干净币上本来就只偏
+    −0.005~−0.08mm —— **为了救 1/10 的反例把 9/10 弄坏，不划算。**
+
+    但它非常适合当**分歧探测器**：它和读图路径完全不同的两路读数一旦分叉，就说明其中
+    一路被几何骗了。实测（10 枚 1元）：
+        干净币     |多边形 − 径向| ≈ 0.09 ~ 0.10mm
+        j 那枚     1.66mm（多边形闭在高边圈的内台阶上，静默读小 1mm）
+        h 那枚     0.49mm
+    所以 0.3mm 的阈值能把它们干净分开 —— 把**静默错误变成显式告警**。
+
+    算法两级，缺一不可（每一级都对应一次真实失败）：
+      ① 平滑梯度找「最外侧显著峰」决定测哪道边 —— 只用半高交点会被双边缘骗回内台阶；
+      ② 峰两侧取局部电平、用半高交点定亚像素位置 —— 只用梯度峰会外冲到眩光晕上
+        （实测 j 过冲到 22.930，标称才 22.25）。
+    """
+    cx, cy = float(center[0]), float(center[1])   # 越界交给 remap 的 BORDER_REPLICATE 处理
+    r_lo = max(1.0, r_guess * (1.0 - band))
+    r_hi = r_guess * (1.0 + band)
+    rs = np.arange(r_lo, r_hi, step)
+    if rs.size < 16:
+        return {}
+    ang = np.linspace(0.0, 2.0 * np.pi, sectors, endpoint=False)
+    X = cx + np.outer(np.cos(ang), rs)
+    Y = cy + np.outer(np.sin(ang), rs)
+    samp = cv2.remap(gray, X.astype(np.float32), Y.astype(np.float32), cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REPLICATE).astype(np.float64)   # 必须转 float：uint8 相减会溢出
+    grad = -np.gradient(samp, step, axis=1)                                # 下降为正
+    ksm = max(3, int(round(2.0 / step)) | 1)
+    gsm = np.apply_along_axis(lambda r: np.convolve(r, np.ones(ksm) / ksm, mode='same'), 1, grad)
+    ref = float(np.median(gsm.max(axis=1)))
+    if ref <= 1e-6:
+        return {}
+    thr = 0.30 * ref
+    pad = max(2, int(round(2.5 / step)))
+    rho = np.full(sectors, np.nan)
+    for i in range(sectors):
+        row = gsm[i]
+        pk = np.flatnonzero((row[1:-1] >= row[:-2]) & (row[1:-1] > row[2:]) & (row[1:-1] >= thr))
+        if pk.size == 0:
+            continue
+        j = int(pk[-1]) + 1                                 # ① 最外侧显著峰 = 真实外缘
+        ins, out = samp[i, max(0, j - pad):j], samp[i, j + 1:min(len(rs), j + 1 + pad)]
+        if ins.size == 0 or out.size == 0:
+            rho[i] = rs[j]
+            continue
+        lev = 0.5 * (float(ins.mean()) + float(out.mean()))               # ② 局部半高
+        lo = max(1, j - pad)
+        seg = samp[i, lo:j + pad + 1]
+        above = np.flatnonzero(seg >= lev)
+        if above.size == 0 or above[-1] >= len(seg) - 1:
+            rho[i] = rs[j]
+            continue
+        j2 = lo + int(above[-1])
+        a, b = seg[j2 - lo - 1], seg[j2 - lo]
+        frac = 0.0 if b == a else float(np.clip((lev - a) / (b - a), 0.0, 1.0))
+        rho[i] = rs[j2 - 1] + frac * step
+    good = np.flatnonzero(~np.isnan(rho))
+    if good.size < sectors // 4:
+        return {}
+    n_empty = sectors - good.size
+    if n_empty:
+        rho = np.interp(np.arange(sectors), np.concatenate([good, good + sectors]),
+                        np.concatenate([rho[good], rho[good]]))
+    crest = float(np.quantile(rho, crest_q))
+    if crest <= 0:
+        return {}
+    rho = np.minimum(rho, crest + tol)
+    mean_sq = float(np.mean(rho ** 2))
+    half = sectors // 2
+    widths = rho[:half] + rho[half:2 * half]
+    worst = int(np.argmin(rho))
+    return {
+        'radial_diameter_pixels': 2.0 * np.sqrt(mean_sq),
+        'radial_caliper_pixels': float(np.percentile(widths, 99)) if widths.size else 0.0,
+        'radial_crest_pixels': 2.0 * crest,
+        'radial_circularity': float(mean_sq / crest ** 2),
+        'radial_deficit_pixels': float(max(0.0, crest - float(rho[worst]))),
+        'radial_sectors_ok': int(good.size),
+        'radial_empty': n_empty,
+    }
+
+
 def calculate_features(contour:np.ndarray) -> dict[str, Any]:
     """轮廓几何特征。两处刻意避开「看起来最直观」的算法，理由写在下面注释里。"""
     area = cv2.contourArea(contour)

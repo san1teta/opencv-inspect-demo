@@ -61,6 +61,9 @@ def _one(img: np.ndarray, coin: str) -> tuple[dict | None, float]:
     deficit = f['deficit_pixels'] / ppm
     return ({'d': d, 'deficit': deficit, 'circ': f['circularity'],
              'caliper': f['caliper_diameter_pixels'] / ppm,
+             # 互检/兜底标记：这两类帧的读数不该和正常帧混在同一个 σ 里
+             'flag': ('可疑' if f.get('edge_suspect') else
+                      ('兜底' if f.get('edge_closed') else '')),
              'result': defect_analyzer.judge_quality(d, deficit, f['circularity'], coin)}, ms)
 
 
@@ -86,7 +89,7 @@ def _stats(folder: str, coin: str) -> dict | None:
               f"下面的均值/σ 已被污染："
               + '、'.join(os.path.basename(p) for p in stale[:8])
               + ('……' if len(stale) > 8 else ''))
-    ds, defs, cs, ms, grades, parts = [], [], [], [], {}, {}
+    ds, defs, cs, ms, grades, parts, flags = [], [], [], [], {}, {}, []
     for name in names:
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)
         ms.append(this_ms)
@@ -94,13 +97,14 @@ def _stats(folder: str, coin: str) -> dict | None:
             ds.append(det['d'])
             defs.append(det['deficit'])
             cs.append(det['circ'])
+            flags.append(det['flag'])
             parts.setdefault(_part_id(os.path.splitext(name)[0]), []).append(det['d'])
             g = det['result']['severity']
             grades[g] = grades.get(g, 0) + 1
     if not names:
         return None
     return {'n': len(names), 'hit': len(ds), 'ds': ds, 'defs': defs, 'cs': cs, 'parts': parts,
-            'ms': ms, 'grades': grades, 'coin': coin}
+            'ms': ms, 'grades': grades, 'flags': flags, 'coin': coin}
 
 
 def _spread(s: dict) -> list[str]:
@@ -128,9 +132,12 @@ def _fmt(s: dict) -> str:
     mean = statistics.fmean(s['ds']) if s['ds'] else float('nan')
     sd = statistics.stdev(s['ds']) if len(s['ds']) > 1 else 0.0
     nom = config_setting.coin_specs[s['coin']]['diameter']
+    nf = sum(1 for x in s.get('flags', []) if x)
     return (f"  {s['coin']:<3} n={s['hit']}/{s['n']} 检出  直径均值 {mean:7.3f}  σ={sd:.3f}mm  "
             f"相对标称 {mean - nom:+.3f}mm  缺损max {max(s['defs']) if s['defs'] else float('nan'):.2f}  "
-            f"耗时 {statistics.fmean(s['ms']):.0f}ms/张  分级 {s['grades']}")
+            f"耗时 {statistics.fmean(s['ms']):.0f}ms/张  分级 {s['grades']}"
+            + (f"\n      ⚠ {nf}/{s['hit']} 张读数可疑（互检分叉或闭运算兜底）"
+               f" —— 上面的 σ 与控制限被这些帧污染，别直接引用" if nf else ''))
 
 
 def main() -> None:
