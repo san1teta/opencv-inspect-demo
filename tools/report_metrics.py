@@ -287,13 +287,16 @@ def main() -> None:
             print(f"  {s['coin']}  中位 {statistics.median(dv):.3f}  最大 {max(dv):.3f}mm"
                   f"  ← 最大若已接近门限 {config_setting.defect_light}mm，说明齿边抬高了底噪，门限要重定")
 
-    print('\n== 圆度分布（用来定 min_circularity）==')
+    print('\n== 圆度分布（门限按面额，见 coin_specs[min_circ]）==')
     for s in batches.values():
         cv_ = s.get('acs') or s['cs']
+        thr = config_setting.min_circ_for(s['coin'])
         if cv_:
-            print(f"  {s['coin']}  最小 {min(cv_):.3f}  中位 {statistics.median(cv_):.3f}"
-                  f"  当前门限 {config_setting.min_circularity}"
-                  f"  ← 完好币最小值贴着门限就是定高了，会误杀良品；远低于门限则说明门限形同虚设")
+            lo = min(cv_)
+            below = sum(1 for x in cv_ if x < thr)
+            print(f"  {s['coin']}  最小 {lo:.3f}  中位 {statistics.median(cv_):.3f}"
+                  f"  门限 {thr}  余量 {lo - thr:+.3f}  低于门限 {below}/{len(cv_)} 帧"
+                  + ('  ← ⚠ 采信币被门限判成形状不合格，误杀良品' if below else ''))
         else:
             print(f"  {s['coin']}  无检出，拿不到圆度")
 

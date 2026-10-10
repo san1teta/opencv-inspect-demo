@@ -98,11 +98,35 @@ class TestCombination(unittest.TestCase):
         self.assertEqual(r['deviation'], 0.0, '偏差数值必须留下')
 
     def test_形状单独命中至少轻度(self):
-        """尺寸和边缘都在限内、只有形状不合格 → 至少轻度，且依据写明是形状。"""
-        r = _q(STD, deficit=0.10, circularity=0.85)
+        """尺寸和边缘都在限内、只有形状不合格 → 至少轻度，且依据写明是形状。
+
+        圆度入参必须**从门限推导**，不写死。本文件开头立了「不写绝对值」这条规矩，
+        可这里原来写的是 0.85 —— 那是「刚好低于当时 0.9 门限」的意思。2026-10-10 门限
+        按面额改成 1元 0.80 之后，0.85 变成合格，这条用例就会**静默地不再测它想测的东西**
+        （断言全绿但方向反了），比直接红掉更危险。
+        """
+        below = config_setting.min_circ_for('1元') - 0.05
+        r = _q(STD, deficit=0.10, circularity=below)
         self.assertEqual(r['severity'], '轻度')
         self.assertEqual(r['direction'], '形状')
         self.assertIn('形状', r['basis'])
+
+    def test_形状门限必须按面额分开(self):
+        """5角/1角 边部齿更密，把 面积/外接圆面积 结构性拉低 —— 这不是缺陷。
+
+        真样本实测采信币最低圆度：1元 0.841 / 5角 0.738 / 1角 0.745。
+        一个全局 0.9 会同时误杀三个面额；一个全局 0.80 仍会误杀 5角 和 1角。
+        所以门限必须挂面额，而且必须留在这三个观测值之下。
+        """
+        obs = {'1元': 0.841, '5角': 0.738, '1角': 0.745}
+        for coin, lo in obs.items():
+            thr = config_setting.min_circ_for(coin)
+            self.assertLess(thr, lo, f'{coin} 门限 {thr} 高于实测最低圆度 {lo}，会误杀良品')
+            self.assertGreater(thr, lo - 0.10,
+                               f'{coin} 门限 {thr} 离实测最低 {lo} 太远，形状判据形同虚设')
+        self.assertNotEqual(config_setting.min_circ_for('1元'),
+                            config_setting.min_circ_for('5角'),
+                            '三个面额的可信币圆度差到 0.1，不该共用一个门限')
 
     def test_缺损量进报表(self):
         self.assertEqual(_q(STD, deficit=1.234)['deficit_mm'], 1.234)

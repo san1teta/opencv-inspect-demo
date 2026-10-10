@@ -223,9 +223,10 @@ def pick_coins(feats: list[dict], spec: dict | None, ppm: float) -> list[dict]:
     留着只因为 test_placement 直接测它；main() 已经改走 `pipeline.find_coins`，
     这样流水线 / 报表 / 验收三条路共用同一份检出规则。新代码不要调这个。
     """
+    min_circ = (spec.get('min_circ', config_setting.min_circularity) if spec
+                else config_setting.min_circularity)
     return detector.coin_candidates(feats, spec['diameter'] if spec else None, ppm,
-                                    config_setting.diameter_gate_mm,
-                                    config_setting.min_circularity)
+                                    config_setting.diameter_gate_mm, min_circ)
 
 
 def main() -> None:

@@ -47,7 +47,7 @@ def judge_quality(diameter_mm: float, deficit_mm: float, circularity: float,
     # 那张好端端的数据在报表里就成了「未检测」，量出来的直径和缺损一起丢掉。
     # 圆度是「形状合不合格」的结论，不是「这张图能不能测」的开关；
     # 数值必须留下，否则 min_circularity 的分布永远攒不起来，而且误杀无法被发现。
-    shape_fail = circularity < config_setting.min_circularity
+    shape_fail = circularity < config_setting.min_circ_for(coin_name)
     result['circularity'] = '不合格' if shape_fail else '合格'
 
     size_grade = _band(excess, 0, config_setting.grade_light, config_setting.grade_mid)

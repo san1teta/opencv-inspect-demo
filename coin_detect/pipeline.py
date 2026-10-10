@@ -27,7 +27,7 @@ def _extract(edge_img: np.ndarray, coin_name: str) -> tuple[list[tuple[np.ndarra
     feats = [detector.calculate_features(c) for c in contours]
     kept = detector.coin_candidates(feats, _nominal(coin_name), config_setting.ppm,
                                     config_setting.diameter_gate_mm,
-                                    config_setting.min_circularity)
+                                    config_setting.min_circ_for(coin_name))
     # 用 id 集合回筛：feats 与 contours 同序构造，本次调用内对象唯一，不会串。
     ids = {id(f) for f in kept}
     return [(c, f) for c, f in zip(contours, feats) if id(f) in ids], feats
@@ -120,8 +120,9 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
             'radial_mm': features.get('radial_mm'),
             'edge_suspect': features.get('edge_suspect', False),
             # 数值圆度单独留一份：judge_quality 把 result['circularity'] 覆成了
-            # 「合格/不合格」，光看报表拿不到分布，而 min_circularity=0.90 这条临时
-            # 门限正是靠真样本的分布来定的。
+            # 「合格/不合格」，光看报表拿不到分布，而 min_circularity 当初只是条假定值
+            # —— 2026-10-10 正是靠这份分布把它按面额重定的（全局 0.9 会误杀完好币：
+            # 1元 2 帧、且 5角/1角 的可信币圆度天然只有 0.74 左右，根本不是一个量）。
             'circularity': features['circularity'],
             'deficit_point': features['deficit_point'],
             # 轮廓是靠闭运算补断口找回来的 —— 必须让报表看得见，否则「兜底成功」

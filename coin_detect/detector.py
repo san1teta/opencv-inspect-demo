@@ -14,7 +14,7 @@ _SECTORS = 360
 #     横跨画面的细环垃圾                       圆度 0.004，r_ref 165mm，缺损 57~61mm
 # 0.35 把两类分开，同时离两边都有余量：对真币留 0.036 的容差，对垃圾留 100 倍。
 # 半枚币的 面积/外接圆面积 正好 0.5，所以这条地板杀不掉任何 conceivable 的硬币。
-# 与质量门限 config_setting.min_circularity(=0.9) 分工不同，别合并成一个数。
+# 与质量门限 coin_specs[min_circ]（1元 0.80 / 5角 0.70 / 1角 0.70）分工不同，别合并成一个数。
 REGION_FLOOR = 0.35
 
 
@@ -227,7 +227,7 @@ def coin_candidates(feats: list[dict[str, Any]], nominal_mm: float | None, ppm: 
         REGION_FLOOR = 0.35   回答「这还是不是一个填充区域」—— 半枚币的 面积/外接圆面积
                               正好是 0.5，所以这条地板杀不掉任何 conceivable 的硬币，
                               只杀得掉「根本不是区域」的细环。
-        min_circularity = 0.9 回答「这枚币圆不圆」—— 质量结论，只能判不合格，不许删数据。
+        min_circ = 0.80/0.70 回答「这枚币圆不圆」—— 质量结论，只能判不合格，不许删数据。
     """
     if nominal_mm:
         lo, hi = diameter_window(nominal_mm, ppm, gate_mm)
