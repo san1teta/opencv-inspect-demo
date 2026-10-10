@@ -86,8 +86,11 @@ def edge_blur_px(gray: np.ndarray, cx: float, cy: float, r_edge: float) -> float
         prof[i] = gray[ys, xs].mean()
     k = max(1, n // 8)
     top, bot = float(prof[:k].mean()), float(prof[-k:].mean())
-    if top < bot:                      # 暗币亮底：翻过来按同一条下降沿处理
-        prof, top, bot = 255.0 - prof, 255.0 - bot, 255.0 - top
+    if top < bot:                      # 暗币亮底：整条剖面翻过来，按同一条下降沿处理
+        # 注意 top/bot 都只取反、**不能对调**：prof[i] <- 255-prof[i] 之后，
+        # 内侧窗口均值仍是 255-top、外侧仍是 255-bot，对调会让 top 依旧小于 bot，
+        # 下一步 `top - bot < 12` 必然成立 → 暗币亮底整条分支从来没工作过（新测试抓到）。
+        prof, top, bot = 255.0 - prof, 255.0 - top, 255.0 - bot
     if top - bot < 12:                 # 对比度不够，边缘根本没成形，不拿它下结论
         return float('nan')
     g = np.gradient(prof)
@@ -95,18 +98,31 @@ def edge_blur_px(gray: np.ndarray, cx: float, cy: float, r_edge: float) -> float
     if j <= 0 or j >= n - 1:
         return float('nan')
 
-    def cross(lev: float, direction: int) -> float:
-        i = j
-        while 0 <= i + direction < n:
-            a, b = prof[i], prof[i + direction]
-            if (a >= lev) != (b >= lev) and a != b:
-                return r0 + (i + direction * (lev - a) / (b - a)) * step
-            i += direction
-        return float('nan')
+    def cross(lev: float) -> float:
+        """在所有跨越 lev 的相邻采样里，取离最陡点 j 最近的那个。
 
-    r_hi = cross(bot + 0.9 * (top - bot), -1)
-    r_lo = cross(bot + 0.1 * (top - bot), +1)
-    if math.isnan(r_hi) or math.isnan(r_lo):
+        不能只朝一个方向找。真实硬币剖面不是对称台阶：币缘内侧有一圈亮带
+        （齿边/浮雕），而 `top` 取的是最内侧窗口均值，会被这圈亮带骗低。
+        a01.jpg 实测 top=77.8 而 r=93.5 处高达 105.8，90% 电平算出来只有 74.3
+        → 整条左段全在电平之上，交点其实落在 j 的**右侧**（i=38.96，[39,40] 段）。
+        原来写死 `direction=-1` 往左找，找不到就返回 nan，
+        **清晰度闸门于是在第一张真照片上整条静默不执行**（判据见 verdict：nan 不算 NG）。
+        """
+        best, best_d = float('nan'), float('inf')
+        for i in range(n - 1):
+            a, b = float(prof[i]), float(prof[i + 1])
+            if a == b or (a >= lev) == (b >= lev):
+                continue
+            d = abs(i + (lev - a) / (b - a) - j)
+            if d < best_d:
+                best, best_d = i + (lev - a) / (b - a), d
+        return r0 + best * step if math.isfinite(best) else float('nan')
+
+    r_hi = cross(bot + 0.9 * (top - bot))
+    r_lo = cross(bot + 0.1 * (top - bot))
+    # r_lo <= r_hi 说明两个交点取自不同的边沿（剖面被浮雕切成多段），
+    # 这时候算出来的「宽度」是假的，宁可返回 nan 让闸门明说自己没测到。
+    if math.isnan(r_hi) or math.isnan(r_lo) or r_lo <= r_hi:
         return float('nan')
     return float(r_lo - r_hi)
 
@@ -203,6 +219,23 @@ def nudge(tx: float, ty: float, cx: float, cy: float, ppm: float,
     return dx, dy, parts
 
 
+def pick_coins(feats: list[dict], spec: dict | None, ppm: float) -> list[dict]:
+    """从候选轮廓里挑「像是这枚面额的币」。抽成纯函数是为了能直接测。
+
+    有面额 → 用与 pipeline 同一个 `diameter_window`。圆度低（变形、被贴胶带）也**必须留下**：
+    那是质量结论，要让它活到报表里被如实判不合格，而不是在这里被当背景悄悄删掉。
+    这正是昨天 51 个假币那条坑的根因 —— 工具一条路、流水线一条路各长一套闸门。
+
+    没面额 → 没有标称直径可依，尺寸窗口无从构造，退回圆度筛。这是**降级**不是等价方案，
+    调用方会把「跳过直径校验」明说出来，不假装这道闸门有效。
+    """
+    if spec:
+        lo_px, hi_px = detector.diameter_window(spec['diameter'], ppm,
+                                                config_setting.diameter_gate_mm)
+        return [f for f in feats if lo_px <= f['diameter_pixels'] <= hi_px]
+    return [f for f in feats if f['circularity'] >= config_setting.min_circularity]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="硬币试拍验收：位置 / 比例尺 / 清晰度")
     ap.add_argument("image")
@@ -228,15 +261,14 @@ def main() -> None:
                              config_setting.canny_low, config_setting.canny_high)
     coins = [detector.calculate_features(c)
              for c in detector.find_contours(edges, config_setting.min_area)]
-    coins = [f for f in coins if f['circularity'] >= config_setting.min_circularity]
+    coin = args.coin or guess_coin(args.image)
+    spec = config_setting.coin_specs.get(coin)
+    coins = pick_coins(coins, spec, ppm)
     if not coins:
         print('[NG] 没找到可信的圆形目标，先看清为什么：')
         for line in explain_no_coin(img):
             print('  ' + line)
         sys.exit(1)
-
-    coin = args.coin or guess_coin(args.image)
-    spec = config_setting.coin_specs.get(coin)
 
     scale = max(0.5, w / 1200)
     thick = max(1, int(round(scale * 2)))
@@ -244,7 +276,7 @@ def main() -> None:
     cv2.drawMarker(vis, (int(tx), int(ty)), (0, 0, 255), cv2.MARKER_CROSS, int(50 * scale), thick)
     print(f"标定纸心 ({tx:.0f}, {ty:.0f}) | 画面中心 ({w // 2}, {h // 2}) —— 纸心在画面中心"
           f"{'上' if ty < h / 2 else '下'} {abs(ty - h / 2) / ppm:.0f}mm，别按画面中心放")
-    print(f"比例尺闸门：面额 {coin or '未识别（跳过直径校验）'}"
+    print(f"比例尺闸门：面额 {coin or '未识别（跳过直径校验，候选退回圆度筛）'}"
           + (f" 标称 {spec['diameter']}mm，容差 ±{SCALE_GUARD_MM}mm" if spec else ''))
 
     failed = 0
