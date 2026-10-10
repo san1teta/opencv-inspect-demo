@@ -177,8 +177,12 @@ class TestCircularityIsSpikeProof(unittest.TestCase):
 
 
 class TestCaliperDiameter(unittest.TestCase):
-    """齿顶对径：与卡尺同口径的量。面积等效把齿槽算成「少掉的面积」，读数落在齿根侧
-    （卡尺实测 1元 22.25mm，面积等效只有 22.04mm，-0.21mm 吃掉允差的 84%）。
+    """齿顶对径：与卡尺同口径的量。面积等效把齿槽算成「少掉的面积」，读数落在齿根侧。
+
+    ⚠ 1元 实测比国标标称 22.25 小 0.21mm，但**这批样本没有卡尺实测值**，所以这 0.21mm 里
+    混着「齿槽几何效应」「样本本身偏小」「标称值公差」三种成分，分不开。
+    因此本组测试只锁得住「齿顶对径与面积等效是两个不同的量」，**锁不住「谁更接近真值」**
+    —— 后者要等独立的长度基准，别拿这两条断言当它已经成立。
     """
 
     def test_bias_is_constant_not_proportional(self):

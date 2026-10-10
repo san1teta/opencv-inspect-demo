@@ -82,8 +82,10 @@ def process_single_frame(frame: np.ndarray, coin_name: str) -> tuple[np.ndarray,
         all_features.append({
             'contour': cnt,
             'diameter_mm': diameter_mm,
-            # 齿顶对径（卡尺等效）单独留着：面积等效直径被齿槽拉向齿根，逐枚偏差
-            # 0.07~0.29mm，尺寸合格判定早晚要换到这一列上，先把数存下来才能对比。
+            # 齿顶对径（与卡尺同口径）单独留着：面积等效被齿槽拉向齿根，而实测与标称的差值
+            # 逐枚不同（0.03~0.29mm）。尺寸合格判定早晚要换到这一列，先把数存下来才能对比。
+            # ⚠ 那串差值里混着「样本本身偏小」和「标称公差」—— 这批样本没有卡尺实测值，
+            #    所以不能把它整个当成系统误差，也别宣称换列之后准确度提高了（还没基准）。
             'caliper_mm': calibration.pixels_to_mm(features['caliper_diameter_pixels'],
                                                    config_setting.ppm),
             # 数值圆度单独留一份：judge_quality 把 result['circularity'] 覆成了
