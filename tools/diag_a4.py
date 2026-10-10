@@ -86,9 +86,18 @@ def main() -> None:
     print(f"纸占画面 横向 {ext_x / w * 100:.1f}% / 纵向 {ext_y / h * 100:.1f}%（取较大者判裁角风险）"
           f" | 最紧一侧每侧留白 {margin_mm:.1f}mm —— 挪机时不许超过这个数")
     grad = 0.0
+    g_long = g_short = 0.0      # 分轴：光报「1.16%」不报是哪一对边，现场只能瞎猜拧哪个旋钮
     if len(m['sides']) == 4:   # 只有四边形算子给得出逐边长度，Otsu 兜底时退化为外接矩形（梯度恒 0）
         s = m['sides']
-        grad = max(abs(s[0] - s[2]) / ((s[0] + s[2]) / 2), abs(s[1] - s[3]) / ((s[1] + s[3]) / 2))
+        dA = abs(s[0] - s[2]) / ((s[0] + s[2]) / 2)
+        dB = abs(s[1] - s[3]) / ((s[1] + s[3]) / 2)
+        grad = max(dA, dB)
+        # 顶点顺序不保证哪对是长边，按实际长度认领：长边对不等 = 俯仰（纸的近边/远边），
+        # 短边对不等 = 横滚（纸的左边/右边）。
+        if (s[0] + s[2]) >= (s[1] + s[3]):
+            g_long, g_short = dA, dB
+        else:
+            g_long, g_short = dB, dA
     checks = [
         ('FAIL', f"长宽比 {expect_aspect:.4f} ±0.5%",
          abs(m['aspect'] - expect_aspect) / expect_aspect <= 0.005, f"{m['aspect']:.4f}"),
@@ -112,6 +121,10 @@ def main() -> None:
         print(f"比例尺梯度 {grad * 100:.2f}%（对边峰峰值）：ppm 取四边均值，只在纸心严格成立。"
               f"按 25mm 直径：纸心到纸边 ±{half:.3f}mm，纸两端之间 {grad * 25:.3f}mm")
         print(f"  → 待测物放纸心 ±{0.05 * args.short / (grad * 25):.0f}mm 内，该项即可压到 0.05mm 以下")
+        # 分轴 + 直接点名旋钮。这条 WARN 以前只给一个合计数，现场只能猜「是俯仰还是横滚」，
+        # 猜错就是白调一次装置、白重拍一张标定图。
+        print(f"     分轴：长边对 {g_long * 100:.2f}%（{'俯仰 —— 调横梁前后高度' if g_long >= g_short else '次要'}）"
+              f" | 短边对 {g_short * 100:.2f}%（{'横滚 —— 调左右两侧高度' if g_short > g_long else '次要'}）")
     print('判卷（WARN 只是提醒，不影响结论；杂亮高但长宽比/互差都过 = 杂物没粘连，可用）：')
     for level, name, ok, value in checks:
         print(f"  {'PASS' if ok else level:<4} {name:<34} 实测 {value}")
