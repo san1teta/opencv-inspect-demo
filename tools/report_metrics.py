@@ -30,6 +30,7 @@ import detector  # noqa: E402
 import image_io  # noqa: E402
 import preprocess  # noqa: E402
 from batch_loader import is_sample  # noqa: E402  工具产物不算样本，理由见 batch_loader
+from calib_guard import stale_paths  # noqa: E402  新旧装置照片混批 = 报表作废，判据见该模块
 
 if isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout.reconfigure(errors='replace')   # GBK 控制台别被一个字符带走整份报告
@@ -77,6 +78,16 @@ def _part_id(stem: str) -> str:
 def _stats(folder: str, coin: str) -> dict | None:
     names = sorted(f for f in os.listdir(folder)
                    if f.lower().endswith(('.jpg', '.jpeg', '.png')) and is_sample(f))
+    # 报表最怕的就是「新旧装置的照片混在一批」：旧照片会被当前 ppm 量出一个看着正常的直径，
+    # 均值和 σ 一起废掉，而检出率还是 100%。判据与验收工具共用 calib_guard，见该模块。
+    stale = stale_paths([os.path.join(folder, n) for n in names],
+                        getattr(config_setting, 'calib_stamp', ''))
+    if stale:
+        print(f"  [警告] {coin}：{len(stale)}/{len(names)} 张比标定"
+              f"（{config_setting.calib_stamp}）旧，当前 ppm 量它们没有意义，"
+              f"下面的均值/σ 已被污染："
+              + '、'.join(os.path.basename(p) for p in stale[:8])
+              + ('……' if len(stale) > 8 else ''))
     ds, defs, cs, ms, grades, parts = [], [], [], [], {}, {}
     for name in names:
         det, this_ms = _one(image_io.read_image(os.path.join(folder, name)), coin)

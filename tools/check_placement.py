@@ -15,7 +15,6 @@ ppm 是标定图四条边的均值，只在纸心那一点严格成立，偏离�
 退出码 0=全部通过，1=有不合格项（可直接挂进批处理/CI）
 """
 import argparse
-import datetime
 import io
 import math
 import os
@@ -27,6 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'coin_detect')))
 
+from calib_guard import photo_vs_calibration  # noqa: E402
 import config_setting  # noqa: E402
 import detector  # noqa: E402
 import image_io  # noqa: E402
@@ -148,27 +148,19 @@ def verdict(dist_mm: float, dev_mm: float | None, blur_mm: float,
 def stale_note(path: str, calib_stamp: str) -> str:
     """照片早于标定时刻 => 它是旧装置拍的，不能拿来验收当前 ppm。没问题返回空串。
 
+    判据本身在 `coin_detect/calib_guard.py` —— 批量流水线也用它，理由见那个模块：
+    这道闸门原先只长在验收工具上，旧照片留在样本目录里会被新 ppm 静默量掉。
     为什么非拦不可：昨天那张 test.jpg 实际比例尺 8.844，今天重标定是 8.6620，
     差 2.1% —— 25mm 上是 0.53mm、两倍于允差，可 `SCALE_GUARD_MM=2.0` 那道闸门
     根本看不见它，三关全绿通过。**用错一张过期照片，工具会点头。**
-
-    为什么用文件修改时间而不是 EXIF：Pillow 不在 requirements.txt 里，
-    不想为一个检查加未声明依赖（同 visualizer 不引 Pillow 的取舍）。
-    而经数据线/微信「原图」进来的文件，mtime 要么保留拍摄时间（判得准）、
-    要么被改成传输时间（更晚，判不出但不会误判）。**只会漏判、不会冤枉新图**，这个方向可接受。
     """
-    if not calib_stamp:
+    times = photo_vs_calibration(path, calib_stamp)
+    if times is None:
         return ''
-    try:
-        calib = datetime.datetime.fromisoformat(calib_stamp)
-        shot = datetime.datetime.fromtimestamp(os.path.getmtime(path))
-    except (ValueError, OSError):
-        return ''
-    if shot < calib:
-        return (f'照片比标定旧 {int((calib - shot).total_seconds() // 60)} 分钟'
-                f'（拍摄 {shot:%m-%d %H:%M} < 标定 {calib:%m-%d %H:%M}）'
-                f'—— 是重标定之前的装置拍的，不能用来验收当前 ppm，重拍')
-    return ''
+    shot, calib = times
+    return (f'照片比标定旧 {int((calib - shot).total_seconds() // 60)} 分钟'
+            f'（拍摄 {shot:%m-%d %H:%M} < 标定 {calib:%m-%d %H:%M}）'
+            f'—— 是重标定之前的装置拍的，不能用来验收当前 ppm，重拍')
 
 
 def explain_no_coin(img) -> list[str]:
