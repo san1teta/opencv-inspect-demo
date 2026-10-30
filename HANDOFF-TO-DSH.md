@@ -215,16 +215,17 @@ tests/test_placement.py        锁清晰度闸门真的在跑（它曾经静默�
 ## 九、版本与备份状态
 
 ```
-GitHub:  https://github.com/san1teta/opencv-inspect-demo   main = 794c2fa（已同步，领先 0）
-推送史:  11 次，最后一次 2026-10-12 09:23
+GitHub:  https://github.com/san1teta/opencv-inspect-demo   main 与本地同步（领先 0）
+推送史:  12 次，最后一次 2026-10-30 15:23
          ⚠ 中间空了 26 天（09-16 → 10-12），而那段正是「标定是错的、
            清晰度闸门不生效」的时期 —— 谁在那期间 clone 过，那份代码有问题，要重取
 本地备份: D:\vscode_workplace\backups\opencv-inspect-demo-20261010{,b,c,d}.bundle
-         d 那个含到 794c2fa 的完整历史，git bundle verify = okay
+         和 opencv-inspect-demo-20261030.bundle（含完整历史，verify = okay）
 ```
 
-**为什么还留 bundle**：这台机器现在 `git ls-remote` 连不上 GitHub（网络/代理）。
-远端不可验证的时候，bundle 是唯一能确定完整的副本。
+**bundle 仍然要留**：2026-10-30 15:23 这次 push 之前，这台机器一度 `git ls-remote`
+连不上 GitHub（网络抖动），远端处于**不可验证**状态。远端不可验证的时候，bundle 是唯一
+能确定完整的副本。这类抖动在离线交付/内网环境里是常态，别赌网络。
 
 `HANDOFF.md`（项目日记，1000+ 行）和 `coin_detect/plan.md` 被 `.git/info/exclude`
 有意排除，**不在仓库里**。要的话单独找我拿。
